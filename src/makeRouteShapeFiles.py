@@ -1,5 +1,6 @@
 from pathlib import Path
 import pandas as pd
+import shutil as st
 
 routes = pd.read_csv(Path().joinpath('OriginalData', 'C-Tran_GTFSfiles_20200105', 'google_transit_20200105',
                                      'routes.txt'))
@@ -16,11 +17,16 @@ trips.insert(0, 'shape_index', trips['shape_id'])
 df = routes.set_index('route_id').join(trips.set_index('route_id'))
 df.drop_duplicates(['route_index', 'shape_index'], inplace=True)
 df = df.set_index('shape_id').join(shapes.set_index('shape_id'))
-df = df[['route_index', 'shape_index', 'shape_pt_sequence', 'shape_pt_lat', 'shape_pt_lon']]
+df = df[['route_index', 'shape_index', 'shape_pt_sequence', 'shape_pt_lat', 'shape_pt_lon', 'route_long_name']]
 
-# Write each route out to its own file df.sort_values(by=['route_index', 'shape_pt_sequence'], inplace=True)
-vals = df['route_index'].unique()
-for val in vals:
-    df2 = df.query('route_index == @val & shape_pt_sequence == null')
-    df2 = df2.sort_values(by='shape_pt_sequence')
-    df2.to_csv(Path().joinpath('out', 'shapes', str(val) + '.csv'))
+# Write each shape to its own file under a directory named the value of route_index
+for subdir in Path().joinpath('out', 'shapes').iterdir():
+    st.rmtree(subdir)
+
+for route_id in df['route_index'].unique():
+    Path().joinpath('out', 'shapes', str(route_id)).mkdir(exist_ok=True)
+    subset = df.query('route_index == @route_id')
+    for shape_id in subset['shape_index'].unique():
+        df2 = subset.query('shape_index == @shape_id').sort_values(by='shape_pt_sequence')
+        df2.to_csv(Path().joinpath('out', 'shapes', str(route_id), str(shape_id) + '.csv'))
+

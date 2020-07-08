@@ -15,9 +15,12 @@ crumbs = pd.concat(li, axis=0, ignore_index=True)
 cad_avl = pd.read_csv(Path().joinpath('OriginalData', 'C-Tran_CAD_AVL_trips_Feb+Mar2020', 'C-Tran_CAD_AVL_trips_Feb'
                                                                                           '+Mar2020.csv'))
 # Set up joins
-crumbs.set_index('EVENT_NO_TRIP')
-cad_avl.set_index('trip_number')
-df = crumbs.join(cad_avl[['trip_number', 'route_number']])
+cad_avl = cad_avl[['trip_id', 'route_number']].drop_duplicates(['trip_id', 'route_number'])
+crumbs.insert(0, 'TRIP_NO', crumbs['EVENT_NO_TRIP'])
+cad_avl.insert(0, 'trip_no', cad_avl['trip_id'])
+crumbs.set_index('TRIP_NO', inplace=True)
+cad_avl.set_index('trip_no', inplace=True)
+df = crumbs.join(cad_avl)
 
 # 1. Which files contain the bread crumb data?
 # a) how much data is there?
