@@ -77,8 +77,8 @@ mem1 = df2.memory_usage()
 mem2 = df.memory_usage()
 
 # 7. For the route with route_short_name=’78’:
-# How many trips are executed for that route each day? 24
-num_trips = df.query('route_number == 78').groupby(['trip_number', 'OPD_DATE']).count().reset_index()
+# How many trips are executed for that route each day? ~53
+num_trips = df.query('route_number == 78').drop_duplicates(['OPD_DATE', 'trip_id']).groupby('OPD_DATE').count()
 # Is it the same number of trips each day? No - this route only appears to have run for four days
 
 # Compute the time taken for each trip and summarize these times as follows:
