@@ -3,8 +3,8 @@ from pathlib import Path
 import pandas as pd
 
 
-def get_distance(x, y, x1, y1):
-    return Point((x, y)).distance(Point((x1, y1)))
+def get_distance(x1, y1, x2, y2):
+    return Point((x1, y1)).distance(Point((x2, y2)))
 
 
 routes = pd.read_csv(Path().joinpath('OriginalData', 'C-Tran_GTFSfiles_20200105', 'google_transit_20200105',
@@ -24,6 +24,7 @@ df.drop_duplicates(['route_index', 'shape_index'], inplace=True)
 df = df.set_index('shape_id').join(shapes.set_index('shape_id'))
 df = df[['route_index', 'shape_index', 'shape_pt_sequence', 'shape_pt_lat', 'shape_pt_lon', 'shape_dist_traveled',
          'route_short_name', 'route_long_name']]
+df['route_short_name'].replace(to_replace='Vine', value=50, inplace=True)
 df.sort_values(['route_index', 'shape_index', 'shape_pt_sequence'])
 
 # Clean up
@@ -31,7 +32,7 @@ del routes
 del trips
 del shapes
 
-# Calculate distance
+# Calculate distance (if file does not exist)
 prog = 0
 prev = 0
 for i in range(1, len(df)):
@@ -49,6 +50,11 @@ for i in range(1, len(df)):
     prog += 1
 
 df.to_csv(Path().joinpath('out', 'shapes_distance.csv'))
+
+# Run these two if file exists
 df = pd.read_csv(Path().joinpath('out', 'shapes_distance.csv'))
+del df['shape_index']
+df['route_short_name'].replace(to_replace='Vine', value=50, inplace=True)   # already wrote file
+df['route_short_name'] = pd.to_numeric(df['route_short_name'])
 
 
