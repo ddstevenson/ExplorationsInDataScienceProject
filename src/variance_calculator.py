@@ -1,7 +1,7 @@
 import sympy as smp
 from pathlib import Path
 import pandas as pd
-import src.variance_calculator_procs as defs
+import src.variance_calculator_lib as defs
 
 routes = pd.read_csv(Path().joinpath('OriginalData', 'C-Tran_GTFSfiles_20200105', 'google_transit_20200105',
                                      'routes.txt'))
