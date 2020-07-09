@@ -49,6 +49,6 @@ for i in range(1, len(df)):
     prog += 1
 
 df.to_csv(Path().joinpath('out', 'shapes_distance.csv'))
-# df = pd.read_csv(Path().joinpath('out', 'shapes_distance.csv'))
+df = pd.read_csv(Path().joinpath('out', 'shapes_distance.csv'))
 
 
