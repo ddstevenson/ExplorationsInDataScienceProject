@@ -37,7 +37,8 @@ del shapes
 df['shape_dist_traveled'] = df['shape_dist_traveled'].mask(df['shape_pt_sequence'] != 0,
                                numpy.sqrt((df.shift(1)['shape_pt_lat'] - df[
                                    'shape_pt_lat']) ** 2 + (df.shift(1)['shape_pt_lon'] -
-                                                 df['shape_pt_lon']) ** 2) + df.shift(1)['shape_dist_traveled'])
+                                                 df['shape_pt_lon']) ** 2) +
+                                                           df.shift(1)['shape_dist_traveled'])
 
 df.to_csv(Path().joinpath('out', 'shapes_distance.csv'))
 
