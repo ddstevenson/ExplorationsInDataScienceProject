@@ -88,3 +88,5 @@ crumbs.dropna(subset=['GPS_LONGITUDE', 'GPS_LATITUDE', 'trip_id'], inplace=True)
 # At this point, we have shp = the route shapes, and crumbs = the breadcrumb data
 for shape_id in shp.drop_duplicates('shape_index')['shape_index']:
     print(shape_id)
+    # TODO: Build the shape coordinate arrays
+    # TODO: Assemble the crumbs matching this shape
