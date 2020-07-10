@@ -1,4 +1,3 @@
-from sympy.geometry import Point
 from pathlib import Path
 import pandas as pd
 import numpy
@@ -33,16 +32,23 @@ df['route_short_name'].replace(to_replace='Vine', value=50, inplace=True)
 df.sort_values(['route_index', 'shape_index', 'shape_pt_sequence'])
 
 # Clean up
-del routes
-del trips
-del shapes
+del routes, trips, shapes
 
-# Calculate distance (if shapes_distance.csv does not exist)
-df['shape_dist_traveled'].mask(df['shape_pt_sequence'] != 0,
-                               numpy.sqrt((df.shift(1)['shape_pt_lat'] - df['shape_pt_lat']) ** 2 + (
-                                       df.shift(1)['shape_pt_lon'] -
-                                       df['shape_pt_lon']) ** 2) +
-                               df.shift(1)['shape_dist_traveled'], inplace=True)
+# Calculate distance traveled along path for each segment
+df['shape_dist_traveled'] = df['shape_dist_traveled'].mask(df['shape_pt_sequence'] != 0,
+                                                           get_distance(df.shift(1)['shape_pt_lat'],
+                                                                        df['shape_pt_lat'],
+                                                                        df.shift(1)['shape_pt_lon'],
+                                                                        df['shape_pt_lon']))
+
+# Now convert this distance to a running total along each segment on the shape
+for index, row in df[['route_index', 'shape_index']].drop_duplicates(['route_index', 'shape_index']).iterrows():
+    df.loc[
+        (df['route_index'] == row['route_index']) & (df['shape_index'] == row['shape_index']), 'shape_dist_traveled'] = \
+        df.loc[(df['route_index'] == row['route_index']) & (
+                df['shape_index'] == row['shape_index']), 'shape_dist_traveled'].cumsum()
+
+del index, row
 
 # Now grab breadcrumb data
 path = Path().joinpath('OriginalData', 'cyclic_data_20200224_0320_wkd')
@@ -50,16 +56,15 @@ files = path.glob("*.tsv")
 li = []
 
 for filename in files:
-    tmp = pd.read_csv(filename, sep='\t', header=0)
-    li.append(tmp)
+    li.append(pd.read_csv(filename, sep='\t', header=0))
 
 crumbs = pd.concat(li, axis=0, ignore_index=True)
 cad_avl = pd.read_csv(Path().joinpath('OriginalData', 'C-Tran_CAD_AVL_trips_Feb+Mar2020', 'C-Tran_CAD_AVL_trips_Feb'
                                                                                           '+Mar2020.csv'))
-del li
-del tmp
+del li, filename, files, path
 
-# Set up joins
+# Merge breadcrumbs with cad_avl data -> links trip_id to route_number;
+# Both are needed to link with shapes data
 cad_avl = cad_avl[['trip_id', 'route_number']].drop_duplicates(['trip_id', 'route_number'])
 crumbs.insert(0, 'TRIP_NO', crumbs['EVENT_NO_TRIP'])
 cad_avl.insert(0, 'trip_no', cad_avl['trip_id'])
@@ -67,3 +72,8 @@ crumbs.set_index('TRIP_NO', inplace=True)
 cad_avl.set_index('trip_no', inplace=True)
 crumbs = crumbs.join(cad_avl)
 del cad_avl
+
+# Clean up data - note, about 550 trips have no associated cad_avl data
+crumbs.dropna(subset=['GPS_LONGITUDE', 'GPS_LATITUDE', 'trip_id'], inplace=True)
+
+# At this point, we have df = the route shapes, and crumbs = the breadcrumb data
