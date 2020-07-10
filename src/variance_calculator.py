@@ -1,20 +1,19 @@
 from pathlib import Path
 import pandas as pd
-import numpy.linalg as la
 import numpy
 
 
 def get_distance(x1, y1, x2, y2):
-    return la.norm(numpy.array((x1, y1)) - numpy.array((x2, y2)))
+    return numpy.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
 
 
 def get_projection(x, y, x1, y1, x2, y2):
     v = numpy.array((x1, y1))
     w = numpy.array((x2, y2))
     p = numpy.array((x, y))
-    len_squared = (x2 - x1)**2 + (y2 - y1)**2
+    len_squared = (x2 - x1) ** 2 + (y2 - y1) ** 2
     # No need to check for length of 0 b/c route shapes don't have dup points
-    t = max(0, min(1, numpy.dot(p-v, w-v) / len_squared))
+    t = max(0, min(1, numpy.dot(p - v, w - v) / len_squared))
     t = v + t * (w - v)
     return t[0], t[1]
 
@@ -34,29 +33,29 @@ trips.insert(0, 'shape_index', trips['shape_id'])
 routes['route_short_name'].replace(to_replace='Vine', value=50, inplace=True)
 routes['route_short_name'] = pd.to_numeric(routes['route_short_name'])
 
-# Join
-df = routes.set_index('route_id').join(trips.set_index('route_id'))
-df.drop_duplicates(['route_index', 'shape_index'], inplace=True)
-df = df.set_index('shape_id').join(shapes.set_index('shape_id'))
-df = df[['route_index', 'shape_index', 'shape_pt_sequence', 'shape_pt_lat', 'shape_pt_lon', 'shape_dist_traveled',
-         'route_short_name', 'route_long_name']]
-df['route_short_name'].replace(to_replace='Vine', value=50, inplace=True)
-df.sort_values(['route_index', 'shape_index', 'shape_pt_sequence'])
+# Join routes to trips to shapes
+shp = routes.set_index('route_id').join(trips.set_index('route_id'))
+shp.drop_duplicates(['route_index', 'shape_index'], inplace=True)
+shp = shp.set_index('shape_id').join(shapes.set_index('shape_id'))
+shp = shp[['route_index', 'shape_index', 'shape_pt_sequence', 'shape_pt_lat', 'shape_pt_lon', 'shape_dist_traveled',
+           'route_short_name', 'route_long_name']]
+shp['route_short_name'].replace(to_replace='Vine', value=50, inplace=True)
+shp.sort_values(['route_index', 'shape_index', 'shape_pt_sequence'])
 del routes, trips, shapes
 
 # Calculate distance traveled along path for each segment
-df['shape_dist_traveled'] = df['shape_dist_traveled'].mask(df['shape_pt_sequence'] != 0,
-                                                           get_distance(df.shift(1)['shape_pt_lat'],
-                                                                        df['shape_pt_lat'],
-                                                                        df.shift(1)['shape_pt_lon'],
-                                                                        df['shape_pt_lon']))
+shp['shape_dist_traveled'] = shp['shape_dist_traveled'].mask(shp['shape_pt_sequence'] != 0,
+                                                             get_distance(shp.shift(1)['shape_pt_lat'],
+                                                                          shp.shift(1)['shape_pt_lon'],
+                                                                          shp['shape_pt_lat'],
+                                                                          shp['shape_pt_lon']))
 
 # Now convert this distance to a running total along each segment on the shape
-for index, row in df[['route_index', 'shape_index']].drop_duplicates(['route_index', 'shape_index']).iterrows():
-    df.loc[
-        (df['route_index'] == row['route_index']) & (df['shape_index'] == row['shape_index']), 'shape_dist_traveled'] = \
-        df.loc[(df['route_index'] == row['route_index']) & (
-                df['shape_index'] == row['shape_index']), 'shape_dist_traveled'].cumsum()
+for index, row in shp[['route_index', 'shape_index']].drop_duplicates(['route_index', 'shape_index']).iterrows():
+    shp.loc[(shp['route_index'] == row['route_index']) & (
+                    shp['shape_index'] == row['shape_index']), 'shape_dist_traveled'] = \
+        shp.loc[(shp['route_index'] == row['route_index']) & (
+                shp['shape_index'] == row['shape_index']), 'shape_dist_traveled'].cumsum()
 
 del index, row
 
@@ -86,4 +85,6 @@ del cad_avl
 # Clean up data - note, about 550 trips in crumbs have no associated cad_avl data
 crumbs.dropna(subset=['GPS_LONGITUDE', 'GPS_LATITUDE', 'trip_id'], inplace=True)
 
-# At this point, we have df = the route shapes, and crumbs = the breadcrumb data
+# At this point, we have shp = the route shapes, and crumbs = the breadcrumb data
+for shape_id in shp.drop_duplicates('shape_index')['shape_index']:
+    print(shape_id)
