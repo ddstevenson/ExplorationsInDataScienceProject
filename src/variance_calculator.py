@@ -1,10 +1,22 @@
 from pathlib import Path
 import pandas as pd
+import numpy.linalg as la
 import numpy
 
 
 def get_distance(x1, y1, x2, y2):
-    return numpy.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+    return la.norm(numpy.array((x1, y1)) - numpy.array((x2, y2)))
+
+
+def get_projection(x, y, x1, y1, x2, y2):
+    v = numpy.array((x1, y1))
+    w = numpy.array((x2, y2))
+    p = numpy.array((x, y))
+    len_squared = (x2 - x1)**2 + (y2 - y1)**2
+    # No need to check for length of 0 b/c route shapes don't have dup points
+    t = max(0, min(1, numpy.dot(p-v, w-v) / len_squared))
+    t = v + t * (w - v)
+    return t[0], t[1]
 
 
 routes = pd.read_csv(Path().joinpath('OriginalData', 'C-Tran_GTFSfiles_20200105', 'google_transit_20200105',
@@ -30,8 +42,6 @@ df = df[['route_index', 'shape_index', 'shape_pt_sequence', 'shape_pt_lat', 'sha
          'route_short_name', 'route_long_name']]
 df['route_short_name'].replace(to_replace='Vine', value=50, inplace=True)
 df.sort_values(['route_index', 'shape_index', 'shape_pt_sequence'])
-
-# Clean up
 del routes, trips, shapes
 
 # Calculate distance traveled along path for each segment
@@ -73,7 +83,7 @@ cad_avl.set_index('trip_no', inplace=True)
 crumbs = crumbs.join(cad_avl)
 del cad_avl
 
-# Clean up data - note, about 550 trips have no associated cad_avl data
+# Clean up data - note, about 550 trips in crumbs have no associated cad_avl data
 crumbs.dropna(subset=['GPS_LONGITUDE', 'GPS_LATITUDE', 'trip_id'], inplace=True)
 
 # At this point, we have df = the route shapes, and crumbs = the breadcrumb data
