@@ -18,12 +18,10 @@ def get_projection(x, y, x1, y1, x2, y2):
     return t[0], t[1]
 
 
-routes = pd.read_csv(Path().joinpath('OriginalData', 'C-Tran_GTFSfiles_20200105', 'google_transit_20200105',
-                                     'routes.txt'))
-shapes = pd.read_csv(Path().joinpath('OriginalData', 'C-Tran_GTFSfiles_20200105', 'google_transit_20200105',
-                                     'shapes.txt'))
-trips = pd.read_csv(Path().joinpath('OriginalData', 'C-Tran_GTFSfiles_20200105', 'google_transit_20200105',
-                                    'trips.txt'))
+new_path = Path().joinpath("..", 'OriginalData', 'C-Tran_GTFSfiles_20200105', 'google_transit_20200105')
+routes = pd.read_csv(new_path.joinpath('routes.txt'))
+shapes = pd.read_csv(new_path.joinpath('shapes.txt'))
+trips = pd.read_csv(new_path.joinpath('trips.txt'))
 
 # Explanation: indices get lost in the merge, so we need to dup them
 routes.insert(0, 'route_index', routes['route_id'])
@@ -41,7 +39,7 @@ shp = shp[['route_index', 'shape_index', 'shape_pt_sequence', 'shape_pt_lat', 's
            'route_short_name', 'route_long_name']]
 shp['route_short_name'].replace(to_replace='Vine', value=50, inplace=True)
 shp.sort_values(['route_index', 'shape_index', 'shape_pt_sequence'])
-del routes, trips, shapes
+del routes, trips, shapes, new_path
 
 # Calculate distance traveled along path for each segment
 shp['shape_dist_traveled'] = shp['shape_dist_traveled'].mask(shp['shape_pt_sequence'] != 0,
@@ -53,14 +51,14 @@ shp['shape_dist_traveled'] = shp['shape_dist_traveled'].mask(shp['shape_pt_seque
 # Now convert this distance to a running total along each segment on the shape
 for index, row in shp[['route_index', 'shape_index']].drop_duplicates(['route_index', 'shape_index']).iterrows():
     shp.loc[(shp['route_index'] == row['route_index']) & (
-                    shp['shape_index'] == row['shape_index']), 'shape_dist_traveled'] = \
+            shp['shape_index'] == row['shape_index']), 'shape_dist_traveled'] = \
         shp.loc[(shp['route_index'] == row['route_index']) & (
                 shp['shape_index'] == row['shape_index']), 'shape_dist_traveled'].cumsum()
 
 del index, row
 
 # Now grab breadcrumb data
-path = Path().joinpath('OriginalData', 'cyclic_data_20200224_0320_wkd')
+path = Path().joinpath("..", 'OriginalData', 'cyclic_data_20200224_0320_wkd')
 files = path.glob("*.tsv")
 li = []
 
@@ -68,8 +66,9 @@ for filename in files:
     li.append(pd.read_csv(filename, sep='\t', header=0))
 
 crumbs = pd.concat(li, axis=0, ignore_index=True)
-cad_avl = pd.read_csv(Path().joinpath('OriginalData', 'C-Tran_CAD_AVL_trips_Feb+Mar2020', 'C-Tran_CAD_AVL_trips_Feb'
-                                                                                          '+Mar2020.csv'))
+cad_avl = pd.read_csv(
+    Path().joinpath("..", 'OriginalData', 'C-Tran_CAD_AVL_trips_Feb+Mar2020', 'C-Tran_CAD_AVL_trips_Feb'
+                                                                              '+Mar2020.csv'))
 del li, filename, files, path
 
 # Merge breadcrumbs with cad_avl data -> links trip_id to route_number;
@@ -86,6 +85,10 @@ del cad_avl
 crumbs.dropna(subset=['GPS_LONGITUDE', 'GPS_LATITUDE', 'trip_id'], inplace=True)
 
 # At this point, we have shp = the route shapes, and crumbs = the breadcrumb data
+# Now it's time to find the "naive" projections onto the shape
+crumbs.insert(8, 'SHAPE_GPS_LONGITUDE', 0, allow_duplicates=True)
+crumbs.insert(9, 'SHAPE_GPS_LATITUDE', 0, allow_duplicates=True)
+crumbs.insert(10, 'SHAPE_DIST_TRAVELED', 0, allow_duplicates=True)
 for shape_id in shp.drop_duplicates('shape_index')['shape_index']:
     print(shape_id)
     # TODO: Build the shape coordinate arrays
