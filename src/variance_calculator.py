@@ -12,7 +12,7 @@ def get_projection(x, y, x1, y1, x2, y2):
     w = numpy.array((x2, y2))
     p = numpy.array((x, y))
     len_squared = (x2 - x1) ** 2 + (y2 - y1) ** 2
-    # No need to check for length of 0 b/c route shapes don't have dup points
+    # No need to check for segment length of 0 b/c route shapes don't have dup points
     t = max(0, min(1, numpy.dot(p - v, w - v) / len_squared))
     t = v + t * (w - v)
     return t[0], t[1]
@@ -39,7 +39,7 @@ shp = shp[['route_index', 'shape_index', 'shape_pt_sequence', 'shape_pt_lat', 's
            'route_short_name', 'route_long_name']]
 shp['route_short_name'].replace(to_replace='Vine', value=50, inplace=True)
 shp.sort_values(['route_index', 'shape_index', 'shape_pt_sequence'])
-del routes, trips, shapes, new_path
+del routes, shapes, new_path  # keeping trips for later
 
 # Calculate distance traveled along path for each segment
 shp['shape_dist_traveled'] = shp['shape_dist_traveled'].mask(shp['shape_pt_sequence'] != 0,
@@ -69,7 +69,14 @@ crumbs = pd.concat(li, axis=0, ignore_index=True)
 cad_avl = pd.read_csv(
     Path().joinpath("..", 'OriginalData', 'C-Tran_CAD_AVL_trips_Feb+Mar2020', 'C-Tran_CAD_AVL_trips_Feb'
                                                                               '+Mar2020.csv'))
-del li, filename, files, path
+cad_avl.drop('trip_number', axis=1)  # redundant with trip_id
+cad_avl.insert(0, 'google_trip', cad_avl['trip_id'] % 10000, True)
+joiner = cad_avl[['google_trip', 'trip_id']].drop_duplicates(['trip_id'])
+joiner.set_index('google_trip', inplace=True)
+trips.set_index('trip_id', inplace=True)
+trips = trips.join(joiner)
+del li, filename, files, path, joiner #leaving this half-done work in place until I hear from Bruce
+# TODO: figure out how to join google trip_id to cad_avl trip_id
 
 # Merge breadcrumbs with cad_avl data -> links trip_id to route_number;
 # Both are needed to link with shapes data
@@ -84,12 +91,15 @@ del cad_avl
 # Clean up data - note, about 550 trips in crumbs have no associated cad_avl data
 crumbs.dropna(subset=['GPS_LONGITUDE', 'GPS_LATITUDE', 'trip_id'], inplace=True)
 
+# Add shape id to crumbs data
+trip_shapes = shp.drop_duplicates(['shape_index', 'route_short_name'])
+
 # At this point, we have shp = the route shapes, and crumbs = the breadcrumb data
 # Now it's time to find the "naive" projections onto the shape
 crumbs.insert(8, 'SHAPE_GPS_LONGITUDE', 0, allow_duplicates=True)
 crumbs.insert(9, 'SHAPE_GPS_LATITUDE', 0, allow_duplicates=True)
 crumbs.insert(10, 'SHAPE_DIST_TRAVELED', 0, allow_duplicates=True)
 for shape_id in shp.drop_duplicates('shape_index')['shape_index']:
-    print(shape_id)
-    # TODO: Build the shape coordinate arrays
+    cur_shape = shp.query('shape_index == @shape_id')
+    cur_crumbs = crumbs.query('')
     # TODO: Assemble the crumbs matching this shape
