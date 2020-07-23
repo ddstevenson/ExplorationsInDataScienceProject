@@ -7,3 +7,6 @@ https://github.com/ddstevenson/ExplorationsInDataScienceProject/blob/master/doc/
 
 ## Deviation Algorithm
 https://github.com/ddstevenson/ExplorationsInDataScienceProject/blob/master/doc/Deviation_Algorithm.pdf
+
+## Midpoint Report
+https://github.com/ddstevenson/ExplorationsInDataScienceProject/blob/master/doc/Midpoint%20Report.pdf
