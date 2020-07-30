@@ -1,21 +1,19 @@
 from pathlib import Path
 import pandas as pd
 import numpy
+import shapely.geometry as geo
+import shapely.ops as ops
+import shapely.prepared as prep
+import itertools as itr
 
 
 def get_distance(x1, y1, x2, y2):
     return numpy.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
 
 
-def get_projection(x, y, x1, y1, x2, y2):
-    v = numpy.array((x1, y1))
-    w = numpy.array((x2, y2))
-    p = numpy.array((x, y))
-    len_squared = (x2 - x1) ** 2 + (y2 - y1) ** 2
-    # No need to check for segment length of 0 b/c route shapes don't have dup points
-    t = max(0, min(1, numpy.dot(p - v, w - v) / len_squared))
-    t = v + t * (w - v)
-    return t[0], t[1]
+def get_projection(p, ls: geo.LineString) -> (float, float):
+    x = ops.nearest_points(ls, geo.Point(p))
+    return x[0].coords[0][0], x[0].coords[0][1]
 
 
 new_path = Path().joinpath('data', 'original', 'C-Tran_GTFSfiles_20200105', 'google_transit_20200105')
@@ -42,11 +40,10 @@ shp.sort_values(['route_index', 'shape_index', 'shape_pt_sequence'])
 del routes, shapes, new_path, trips
 
 # Calculate distance traveled along path for each segment
-shp['shape_dist_traveled'] = shp['shape_dist_traveled'].mask(shp['shape_pt_sequence'] != 0,
-                                                             get_distance(shp.shift(1)['shape_pt_lat'],
+shp['shape_dist_traveled'].mask(shp['shape_pt_sequence'] != 0, get_distance(shp.shift(1)['shape_pt_lat'],
                                                                           shp.shift(1)['shape_pt_lon'],
                                                                           shp['shape_pt_lat'],
-                                                                          shp['shape_pt_lon']))
+                                                                          shp['shape_pt_lon']), inplace=True)
 
 # Now convert this distance to a running total along each segment on the shape
 for index, row in shp[['route_index', 'shape_index']].drop_duplicates(['route_index', 'shape_index']).iterrows():
@@ -91,10 +88,22 @@ del cad_avl
 
 # At this point, we have shp = the route shapes, and crumbs = the breadcrumb data
 # Now it's time to find the "naive" projections onto the shape
-crumbs.insert(8, 'SHAPE_GPS_LONGITUDE', 0, allow_duplicates=True)
-crumbs.insert(9, 'SHAPE_GPS_LATITUDE', 0, allow_duplicates=True)
-crumbs.insert(10, 'SHAPE_DIST_TRAVELED', 0, allow_duplicates=True)
+crumbs.insert(11, 'SHAPE_GPS_LONGITUDE', 0, allow_duplicates=True)
+crumbs.insert(12, 'SHAPE_GPS_LATITUDE', 0, allow_duplicates=True)
+crumbs.insert(13, 'SHAPE_DIST_TRAVELED', 0, allow_duplicates=True)
 for shape_id in shp.drop_duplicates('shape_index')['shape_index']:
     cur_shape = shp.query('shape_index == @shape_id')
-    cur_crumbs = crumbs.query('')
-    # TODO: Assemble the crumbs matching this shape
+    cur_ls = geo.LineString(list(cur_shape[['shape_pt_lon', 'shape_pt_lat']].to_records(index=False)))
+    crumbs[['SHAPE_GPS_LONGITUDE', 'SHAPE_GPS_LATITUDE']].mask(crumbs['shapeID'] == shape_id, map(get_projection,
+           zip(crumbs['GPS_LONGITUDE'].where(crumbs['shapeID'] == shape_id),
+                           crumbs['GPS_LATITUDE'].where(crumbs['shapeID'] == shape_id)),
+          itr.repeat(cur_ls)))
+
+
+
+
+
+
+
+
+
