@@ -2,11 +2,11 @@ from pathlib import Path
 import pandas as pd
 import shutil as st
 
-routes = pd.read_csv(Path().joinpath('OriginalData', 'C-Tran_GTFSfiles_20200105', 'google_transit_20200105',
+routes = pd.read_csv(Path().joinpath('data','original', 'C-Tran_GTFSfiles_20200105', 'google_transit_20200105',
                                      'routes.txt'))
-shapes = pd.read_csv(Path().joinpath('OriginalData', 'C-Tran_GTFSfiles_20200105', 'google_transit_20200105',
+shapes = pd.read_csv(Path().joinpath('data','original', 'C-Tran_GTFSfiles_20200105', 'google_transit_20200105',
                                      'shapes.txt'))
-trips = pd.read_csv(Path().joinpath('OriginalData', 'C-Tran_GTFSfiles_20200105', 'google_transit_20200105',
+trips = pd.read_csv(Path().joinpath('data','original', 'C-Tran_GTFSfiles_20200105', 'google_transit_20200105',
                                     'trips.txt'))
 
 # Explanation: indices get lost in the merge, so we need to dup them

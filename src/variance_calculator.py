@@ -18,7 +18,7 @@ def get_projection(x, y, x1, y1, x2, y2):
     return t[0], t[1]
 
 
-new_path = Path().joinpath("..", 'OriginalData', 'C-Tran_GTFSfiles_20200105', 'google_transit_20200105')
+new_path = Path().joinpath('data', 'original', 'C-Tran_GTFSfiles_20200105', 'google_transit_20200105')
 routes = pd.read_csv(new_path.joinpath('routes.txt'))
 shapes = pd.read_csv(new_path.joinpath('shapes.txt'))
 trips = pd.read_csv(new_path.joinpath('trips.txt'))
@@ -39,7 +39,7 @@ shp = shp[['route_index', 'shape_index', 'shape_pt_sequence', 'shape_pt_lat', 's
            'route_short_name', 'route_long_name']]
 shp['route_short_name'].replace(to_replace='Vine', value=50, inplace=True)
 shp.sort_values(['route_index', 'shape_index', 'shape_pt_sequence'])
-del routes, shapes, new_path  # keeping trips for later
+del routes, shapes, new_path, trips
 
 # Calculate distance traveled along path for each segment
 shp['shape_dist_traveled'] = shp['shape_dist_traveled'].mask(shp['shape_pt_sequence'] != 0,
@@ -58,7 +58,7 @@ for index, row in shp[['route_index', 'shape_index']].drop_duplicates(['route_in
 del index, row
 
 # Now grab breadcrumb data
-path = Path().joinpath("..", 'OriginalData', 'cyclic_data_20200224_0320_wkd')
+path = Path().joinpath('data', 'original', 'cyclic_data_20200224_0320_wkd')
 files = path.glob("*.tsv")
 li = []
 
@@ -66,33 +66,28 @@ for filename in files:
     li.append(pd.read_csv(filename, sep='\t', header=0))
 
 crumbs = pd.concat(li, axis=0, ignore_index=True)
-cad_avl = pd.read_csv(
-    Path().joinpath("..", 'OriginalData', 'C-Tran_CAD_AVL_trips_Feb+Mar2020', 'C-Tran_CAD_AVL_trips_Feb'
-                                                                              '+Mar2020.csv'))
-cad_avl.drop('trip_number', axis=1)  # redundant with trip_id
-cad_avl.insert(0, 'google_trip', cad_avl['trip_id'] % 10000, True)
-joiner = cad_avl[['google_trip', 'trip_id']].drop_duplicates(['trip_id'])
-joiner.set_index('google_trip', inplace=True)
-trips.set_index('trip_id', inplace=True)
-trips = trips.join(joiner)
-del li, filename, files, path, joiner #leaving this half-done work in place until I hear from Bruce
-# TODO: figure out how to join google trip_id to cad_avl trip_id
-
-# Merge breadcrumbs with cad_avl data -> links trip_id to route_number;
-# Both are needed to link with shapes data
-cad_avl = cad_avl[['trip_id', 'route_number']].drop_duplicates(['trip_id', 'route_number'])
-crumbs.insert(0, 'TRIP_NO', crumbs['EVENT_NO_TRIP'])
-cad_avl.insert(0, 'trip_no', cad_avl['trip_id'])
-crumbs.set_index('TRIP_NO', inplace=True)
-cad_avl.set_index('trip_no', inplace=True)
-crumbs = crumbs.join(cad_avl)
-del cad_avl
+del li, filename, files, path
 
 # Clean up data - note, about 550 trips in crumbs have no associated cad_avl data
-crumbs.dropna(subset=['GPS_LONGITUDE', 'GPS_LATITUDE', 'trip_id'], inplace=True)
+crumbs.dropna(subset=['GPS_LONGITUDE', 'GPS_LATITUDE', 'EVENT_NO_TRIP'], inplace=True)
 
 # Add shape id to crumbs data
-trip_shapes = shp.drop_duplicates(['shape_index', 'route_short_name'])
+tripToShape = pd.read_csv(Path().joinpath('data', 'modified', 'trip2shape.csv'))
+crumbs.insert(0, 'trip_id', crumbs['EVENT_NO_TRIP'])
+crumbs.set_index('EVENT_NO_TRIP', inplace=True)
+tripToShape.set_index('tripID', inplace=True)
+crumbs = crumbs.join(tripToShape, how='outer')
+del tripToShape
+
+# Add vehicle_number and route_id to crumbs
+cad_avl = pd.read_csv(
+    Path().joinpath('data', 'original', 'C-Tran_CAD_AVL_trips_Feb+Mar2020', 'C-Tran_CAD_AVL_trips_Feb'
+                                                                            '+Mar2020.csv'))
+cad_avl = cad_avl[['vehicle_number', 'trip_id', 'route_number']]
+cad_avl = cad_avl.drop_duplicates(['vehicle_number', 'trip_id', 'route_number'])
+cad_avl.set_index('trip_id', inplace=True)
+crumbs = crumbs.join(cad_avl)
+del cad_avl
 
 # At this point, we have shp = the route shapes, and crumbs = the breadcrumb data
 # Now it's time to find the "naive" projections onto the shape
