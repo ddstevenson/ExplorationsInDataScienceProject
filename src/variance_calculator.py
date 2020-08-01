@@ -1,18 +1,18 @@
 from pathlib import Path
-import pandas as pd
+
+import geopandas as gp
 import numpy
+import pandas as pd
 import shapely.geometry as geo
 import shapely.ops as ops
-import shapely.prepared as prep
-import itertools as itr
 
 
 def get_distance(x1, y1, x2, y2):
     return numpy.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
 
 
-def get_projection(p, ls: geo.LineString) -> (float, float):
-    x = ops.nearest_points(ls, geo.Point(p))
+def get_projection(row: gp.GeoDataFrame) -> (float, float):
+    x = ops.nearest_points(row.geometry, row.shape_line)
     return x[0].coords[0][0], x[0].coords[0][1]
 
 
@@ -86,18 +86,46 @@ cad_avl.set_index('trip_id', inplace=True)
 crumbs = crumbs.join(cad_avl)
 del cad_avl
 
+# Reduce dataset size for testing
+crumbs = crumbs.query('shapeID == 49')
+
 # At this point, we have shp = the route shapes, and crumbs = the breadcrumb data
 # Now it's time to find the "naive" projections onto the shape
-crumbs.insert(11, 'SHAPE_GPS_LONGITUDE', 0, allow_duplicates=True)
-crumbs.insert(12, 'SHAPE_GPS_LATITUDE', 0, allow_duplicates=True)
-crumbs.insert(13, 'SHAPE_DIST_TRAVELED', 0, allow_duplicates=True)
+# First, we'll create a breadcrumbs gdf w/ correct shape geometry assigned
+crumbs.dropna(subset=['GPS_LONGITUDE', 'GPS_LATITUDE'], inplace=True)
+crumbs.insert(11, 'key', range(len(crumbs)))
+print("Writing point objects to breadcrumbs...")
+crumbs = gp.GeoDataFrame(crumbs, geometry=gp.points_from_xy(crumbs.GPS_LONGITUDE, crumbs.GPS_LATITUDE))
+crumbsLines = gp.GeoDataFrame(crumbs[['key', 'shapeID', 'geometry']])
+crumbs.set_index('key', inplace=True)
+crumbsLines.set_index('key', inplace=True)
+
+# Route shape objects
+print("Writing route shape objects to breadcrumbs...")
 for shape_id in shp.drop_duplicates('shape_index')['shape_index']:
     cur_shape = shp.query('shape_index == @shape_id')
     cur_ls = geo.LineString(list(cur_shape[['shape_pt_lon', 'shape_pt_lat']].to_records(index=False)))
-    crumbs[['SHAPE_GPS_LONGITUDE', 'SHAPE_GPS_LATITUDE']].mask(crumbs['shapeID'] == shape_id, map(get_projection,
-           zip(crumbs['GPS_LONGITUDE'].where(crumbs['shapeID'] == shape_id),
-                           crumbs['GPS_LATITUDE'].where(crumbs['shapeID'] == shape_id)),
-          itr.repeat(cur_ls)))
+    crumbsLines.geometry.loc[crumbsLines['shapeID'] == shape_id] = cur_ls
+    print(shape_id)
+
+crumbs.insert(12, 'SHAPE_GPS_LONGITUDE', 0, allow_duplicates=True)
+crumbs.insert(13, 'SHAPE_GPS_LATITUDE', 0, allow_duplicates=True)
+crumbs.insert(14, 'SHAPE_DEVIATION_DIST', 0, allow_duplicates=True)
+crumbs.insert(15, 'shape_line', crumbsLines['geometry'])
+del crumbsLines, cur_ls, cur_shape, shape_id
+
+# Now naive projections (computationally intensive!)
+print("Writing naive route projections onto breadcrumbs...")
+projections = crumbs.apply(get_projection, axis=1)
+crumbs[['SHAPE_GPS_LONGITUDE', 'SHAPE_GPS_LATITUDE']] = pd.DataFrame(projections)[0].to_list()
+del projections
+
+# Great, now for the last step:
+
+
+
+# OK, this one works get_projection(crumbs.geometry[0], crumbsLines.geometry[0])
+
 
 
 
