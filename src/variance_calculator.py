@@ -5,6 +5,21 @@ import numpy
 import pandas as pd
 import shapely.geometry as geo
 import shapely.ops as ops
+from datetime import datetime
+
+# constants
+UP = -1
+DOWN = 1
+
+
+def is_look_behind(df):
+    return (crumbs['SHAPE_DEVIATION_DIST'] > crumbs['SHAPE_DEVIATION_DIST'].shift(DOWN, fill_value=0)) & (
+                    crumbs['trip_id'] == crumbs['trip_id'].shift(DOWN, fill_value=0))
+
+
+def is_look_forward(df):
+    return (crumbs['SHAPE_DEVIATION_DIST'] < crumbs['SHAPE_DEVIATION_DIST'].shift(UP, fill_value=0)) & (
+                    crumbs['trip_id'] == crumbs['trip_id'].shift(UP, fill_value=0))
 
 
 def get_distance(x1, y1, x2, y2):
@@ -17,7 +32,7 @@ def get_projection(row: gp.GeoDataFrame) -> (float, float):
 
 
 def get_route_distance(row: gp.GeoDataFrame) -> float:
-    return row.shape_line.project(row.geometry)     # Confusingly, the lib's distance method is called "project()"
+    return row.shape_line.project(row.geometry)  # Confusingly, the lib's distance method is called "project()"
 
 
 new_path = Path().joinpath('data', 'original', 'C-Tran_GTFSfiles_20200105', 'google_transit_20200105')
@@ -42,21 +57,6 @@ shp = shp[['route_index', 'shape_index', 'shape_pt_sequence', 'shape_pt_lat', 's
 shp['route_short_name'].replace(to_replace='Vine', value=50, inplace=True)
 shp.sort_values(['route_index', 'shape_index', 'shape_pt_sequence'])
 del routes, shapes, new_path, trips
-
-# Calculate distance traveled along path for each segment
-shp['shape_dist_traveled'].mask(shp['shape_pt_sequence'] != 0, get_distance(shp.shift(1)['shape_pt_lat'],
-                                                                          shp.shift(1)['shape_pt_lon'],
-                                                                          shp['shape_pt_lat'],
-                                                                          shp['shape_pt_lon']), inplace=True)
-
-# Now convert this distance to a running total along each segment on the shape
-for index, row in shp[['route_index', 'shape_index']].drop_duplicates(['route_index', 'shape_index']).iterrows():
-    shp.loc[(shp['route_index'] == row['route_index']) & (
-            shp['shape_index'] == row['shape_index']), 'shape_dist_traveled'] = \
-        shp.loc[(shp['route_index'] == row['route_index']) & (
-                shp['shape_index'] == row['shape_index']), 'shape_dist_traveled'].cumsum()
-
-del index, row
 
 # Now grab breadcrumb data
 path = Path().joinpath('data', 'original', 'cyclic_data_20200224_0320_wkd')
@@ -116,27 +116,23 @@ crumbs.insert(12, 'SHAPE_GPS_LONGITUDE', 0, allow_duplicates=True)
 crumbs.insert(13, 'SHAPE_GPS_LATITUDE', 0, allow_duplicates=True)
 crumbs.insert(14, 'SHAPE_DEVIATION_DIST', 0, allow_duplicates=True)
 crumbs.insert(15, 'shape_line', crumbsLines['geometry'])
-del crumbsLines, cur_ls, cur_shape, shape_id
+del crumbsLines, cur_ls, cur_shape, shape_id, shp
 
 # Now naive projections (computationally intensive!)
-print("Writing naive route projections onto breadcrumbs...")
+print(
+    "Writing naive route projections onto breadcrumbs...this may take an hour or so! Began: " + datetime.now().strftime(
+        "%H:%M:%S"))
 projections = crumbs.apply(get_projection, axis=1)
 crumbs[['SHAPE_GPS_LONGITUDE', 'SHAPE_GPS_LATITUDE']] = pd.DataFrame(projections)[0].to_list()
 crumbs = gp.GeoDataFrame(crumbs, geometry=gp.points_from_xy(crumbs.SHAPE_GPS_LONGITUDE, crumbs.SHAPE_GPS_LATITUDE))
 del projections
 
 # Also we need the distance of each naive projection along the shape
+print("Writing distance of naive projections along route onto breadcrumbs...")
 projections = crumbs.apply(get_route_distance, axis=1)
 crumbs['SHAPE_DEVIATION_DIST'] = pd.DataFrame(projections)
 del projections
 
-# Final step is to
-
-
-
-
-
-
-
-
-
+# Final step is to find out-of-order crumbs by checking their previous and next distances
+ahead = crumbs.mask(is_look_forward)
+behind = crumbs.mask(is_look_behind)
