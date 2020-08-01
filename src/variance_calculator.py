@@ -16,6 +16,10 @@ def get_projection(row: gp.GeoDataFrame) -> (float, float):
     return x[0].coords[0][0], x[0].coords[0][1]
 
 
+def get_route_distance(row: gp.GeoDataFrame) -> float:
+    return row.shape_line.project(row.geometry)     # Confusingly, the lib's distance method is called "project()"
+
+
 new_path = Path().joinpath('data', 'original', 'C-Tran_GTFSfiles_20200105', 'google_transit_20200105')
 routes = pd.read_csv(new_path.joinpath('routes.txt'))
 shapes = pd.read_csv(new_path.joinpath('shapes.txt'))
@@ -118,14 +122,15 @@ del crumbsLines, cur_ls, cur_shape, shape_id
 print("Writing naive route projections onto breadcrumbs...")
 projections = crumbs.apply(get_projection, axis=1)
 crumbs[['SHAPE_GPS_LONGITUDE', 'SHAPE_GPS_LATITUDE']] = pd.DataFrame(projections)[0].to_list()
+crumbs = gp.GeoDataFrame(crumbs, geometry=gp.points_from_xy(crumbs.SHAPE_GPS_LONGITUDE, crumbs.SHAPE_GPS_LATITUDE))
 del projections
 
-# Great, now for the last step:
+# Also we need the distance of each naive projection along the shape
+projections = crumbs.apply(get_route_distance, axis=1)
+crumbs['SHAPE_DEVIATION_DIST'] = pd.DataFrame(projections)
+del projections
 
-
-
-# OK, this one works get_projection(crumbs.geometry[0], crumbsLines.geometry[0])
-
+# Final step is to
 
 
 
