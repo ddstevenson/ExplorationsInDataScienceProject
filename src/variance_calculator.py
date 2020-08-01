@@ -10,15 +10,18 @@ from datetime import datetime
 # constants
 UP = -1
 DOWN = 1
+TOLERANCE = -0.00001
 
 
+# Bug: this will automatically include first record - count accordingly
 def is_look_behind(df):
-    return (crumbs['SHAPE_DEVIATION_DIST'] > crumbs['SHAPE_DEVIATION_DIST'].shift(DOWN, fill_value=0)) & (
+    return (crumbs['SHAPE_DEVIATION_DIST'] - crumbs['SHAPE_DEVIATION_DIST'].shift(DOWN, fill_value=0) > TOLERANCE) & (
                     crumbs['trip_id'] == crumbs['trip_id'].shift(DOWN, fill_value=0))
 
 
+# Bug: this will automatically include last record - count accordingly
 def is_look_forward(df):
-    return (crumbs['SHAPE_DEVIATION_DIST'] < crumbs['SHAPE_DEVIATION_DIST'].shift(UP, fill_value=0)) & (
+    return (TOLERANCE < crumbs['SHAPE_DEVIATION_DIST'].shift(UP, fill_value=0) - crumbs['SHAPE_DEVIATION_DIST']) & (
                     crumbs['trip_id'] == crumbs['trip_id'].shift(UP, fill_value=0))
 
 
