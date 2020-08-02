@@ -11,18 +11,7 @@ from datetime import datetime
 UP = -1
 DOWN = 1
 TOLERANCE = -0.00001
-
-
-# Bug: this will automatically include first record - count accordingly
-def is_look_behind(df):
-    return (crumbs['SHAPE_DEVIATION_DIST'] - crumbs['SHAPE_DEVIATION_DIST'].shift(DOWN, fill_value=0) > TOLERANCE) & (
-                    crumbs['trip_id'] == crumbs['trip_id'].shift(DOWN, fill_value=0))
-
-
-# Bug: this will automatically include last record - count accordingly
-def is_look_forward(df):
-    return (TOLERANCE < crumbs['SHAPE_DEVIATION_DIST'].shift(UP, fill_value=0) - crumbs['SHAPE_DEVIATION_DIST']) & (
-                    crumbs['trip_id'] == crumbs['trip_id'].shift(UP, fill_value=0))
+MAX_LOOK_FORWARD = 30  # This number should be more than the length of longest contiguous seq. of out of order crumbs
 
 
 def get_distance(x1, y1, x2, y2):
@@ -36,6 +25,10 @@ def get_projection(row: gp.GeoDataFrame) -> (float, float):
 
 def get_route_distance(row: gp.GeoDataFrame) -> float:
     return row.shape_line.project(row.geometry)  # Confusingly, the lib's distance method is called "project()"
+
+
+def get_interpolations(row: gp.GeoDataFrame):
+    return row.shape_line.interpolate(row['scalar'])  # Interpolate() gets the point at n distance along the calling shape
 
 
 new_path = Path().joinpath('data', 'original', 'C-Tran_GTFSfiles_20200105', 'google_transit_20200105')
@@ -136,6 +129,49 @@ projections = crumbs.apply(get_route_distance, axis=1)
 crumbs['SHAPE_DEVIATION_DIST'] = pd.DataFrame(projections)
 del projections
 
-# Final step is to find out-of-order crumbs by checking their previous and next distances
-ahead = crumbs.mask(is_look_forward)
-behind = crumbs.mask(is_look_behind)
+
+# Bug: this will automatically include last record - count accordingly
+def is_at_least_n_forward(df: gp.GeoDataFrame, how_far: int = 1) -> bool:
+    diff = df['SHAPE_DEVIATION_DIST'].shift(UP * how_far, fill_value=0) - df['SHAPE_DEVIATION_DIST']
+    is_same_trip = (df['trip_id'] == df['trip_id'].shift(UP * how_far, fill_value=0))
+    return (TOLERANCE < diff) & is_same_trip
+
+
+# These functions assume that df['processing_distance'] is filled with the look-ahead distance
+def is_exactly_n_forward(df: gp.GeoDataFrame) -> bool:
+    how_far = df['processing_distance'][0]
+    return is_at_least_n_forward(df, how_far) != is_at_least_n_forward(df, how_far + 1)
+
+
+def is_exactly_n_forward_and_terminal(df: gp.GeoDataFrame) -> bool:
+    how_far = df['processing_distance'][0]
+    is_same_trip = (df['trip_id'] == df['trip_id'].shift(UP * how_far, fill_value=0))
+    return is_exactly_n_forward(df) & ~is_same_trip
+
+
+def update_to_n_ahead(df: gp.GeoDataFrame) -> gp.GeoDataFrame:
+    how_far = df['processing_distance'][0]
+    return df.shift(UP * how_far)
+
+
+# Final step is to find out-of-order crumbs by comparing each to its next neighbor
+# Notice we only have to find crumbs that are ahead, since exactly the same number of
+# crumbs will be behind as will be ahead.
+print("Matching out-of-order projections with their probable locations...")
+crumbs.insert(16, 'processing_distance', 0)
+crumbs.insert(17, 'scalar', 0)
+crumbs.insert(18, 'potentials', 0)
+for n in range(1, MAX_LOOK_FORWARD):
+    crumbs['processing_distance'] = n
+    # Handle the edge case where an out-of-order point goes to the end of the recorded trip
+    crumbs['geometry'] = crumbs.mask(is_exactly_n_forward_and_terminal, update_to_n_ahead)['geometry']
+    # Now we've got to find the point on the route halfway between the correct crumbs
+    p1 = crumbs['SHAPE_DEVIATION_DIST'].shift(UP * n, fill_value=0)
+    p2 = crumbs['SHAPE_DEVIATION_DIST'].shift(UP * (n + 1), fill_value=0)
+    crumbs['scalar'] = (p1 + p2) / 2
+    crumbs['potentials'] = gp.GeoDataFrame(crumbs.apply(get_interpolations, axis=1))    # attach potential new points
+    crumbs['geometry'] = crumbs.mask(is_exactly_n_forward)['geometry']  # clear out unwanted entries from geometry
+    crumbs['potentials'].update(crumbs['geometry'])   # Replace cleared out entires w/ potential new points
+    crumbs['geometry'] = crumbs['potentials']
+    print("Step " + str(n) + " of " + str(MAX_LOOK_FORWARD))
+
