@@ -1,7 +1,7 @@
 from pathlib import Path
 
+import os.path as os
 import geopandas as gp
-import numpy
 import pandas as pd
 import shapely.geometry as geo
 import shapely.ops as ops
@@ -10,8 +10,8 @@ import datetime
 # constants
 UP = -1
 DOWN = 1
-CONVERSION_FACTOR = 0.00000702271   # 1 meter = 0.00000702271
-METERS_TOLERANCE = 5
+CONVERSION_FACTOR = 0.000009009  # 1 meter
+METERS_TOLERANCE = 2
 TOLERANCE = -1 * CONVERSION_FACTOR * METERS_TOLERANCE
 MAX_LOOK_FORWARD = 30  # This number should be more than the length of longest contiguous seq. of out of order crumbs
 
@@ -48,8 +48,8 @@ def update_to_n_ahead(df: gp.GeoDataFrame) -> gp.GeoDataFrame:
     return df.shift(UP * how_far)
 
 
-def get_distance(x1, y1, x2, y2):
-    return numpy.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+def get_distance(row: gp.GeoDataFrame) -> float:
+    return row.projected_point.distance(row.geometry)
 
 
 def get_projection(row: gp.GeoDataFrame) -> (float, float):
@@ -124,129 +124,160 @@ crumbs = crumbs.join(cad_avl)
 del cad_avl
 
 # Reduce dataset size for testing
-crumbs = crumbs.query('shapeID == 49')
+# crumbs = crumbs.query('shapeID == 49')
 
-# At this point, we have shp = the route shapes, and crumbs = the breadcrumb data
-# Now it's time to find the "naive" projections onto the shape
-# First, we'll create a breadcrumbs gdf w/ correct shape geometry assigned
-crumbs.dropna(subset=['GPS_LONGITUDE', 'GPS_LATITUDE'], inplace=True)
-crumbs.insert(len(crumbs.columns), 'key', range(len(crumbs)))
-print("Writing point objects to breadcrumbs...")
-crumbs = gp.GeoDataFrame(crumbs, geometry=gp.points_from_xy(crumbs.GPS_LONGITUDE, crumbs.GPS_LATITUDE))
-crumbsLines = gp.GeoDataFrame(crumbs[['key', 'shapeID', 'geometry']])
-crumbs.set_index('key', inplace=True)
-crumbsLines.set_index('key', inplace=True)
+# Init the for loop
+# Added this loop to keep pipeline unclogged at the adjustment calculations,
+# as I was not getting good time efficiency in final for loop due to the innermost iterrows()
+total_set = crumbs
+shapes = shp['shape_index'].unique().tolist()
+for shape in shapes:
+    crumbs = total_set.query('shapeID == @shape')
+    if len(crumbs) == 0 or os.isfile('./out/shapes/' + 'deviation_breadcrumbs' + str(shape) + '.csv'):
+        continue
+    else:
+        print("Computing route deviations for shape: " + str(shape) + " Began: " + datetime.datetime.now().strftime(
+            "%H:%M:%S"))
 
-# Route shape objects
-print("Writing route shape objects to breadcrumbs...")
-for shape_id in shp.drop_duplicates('shape_index')['shape_index']:
-    cur_shape = shp.query('shape_index == @shape_id')
-    cur_ls = geo.LineString(list(cur_shape[['shape_pt_lon', 'shape_pt_lat']].to_records(index=False)))
-    crumbsLines.geometry.loc[crumbsLines['shapeID'] == shape_id] = cur_ls
-    print("Shape ID: " + str(shape_id))
+    # At this point, we have shp = the route shapes, and crumbs = the breadcrumb data
+    # Now it's time to find the "naive" projections onto the shape
+    # First, we'll create a breadcrumbs gdf w/ correct shape geometry assigned
+    crumbs.dropna(subset=['GPS_LONGITUDE', 'GPS_LATITUDE'], inplace=True)
+    crumbs.insert(len(crumbs.columns), 'key', range(len(crumbs)))
+    print("Writing point objects to breadcrumbs...")
+    crumbs = gp.GeoDataFrame(crumbs, geometry=gp.points_from_xy(crumbs.GPS_LONGITUDE, crumbs.GPS_LATITUDE))
+    crumbsLines = gp.GeoDataFrame(crumbs[['key', 'shapeID', 'geometry']])
+    crumbs.set_index('key', inplace=True)
+    crumbsLines.set_index('key', inplace=True)
 
-crumbs.insert(len(crumbs.columns), 'SHAPE_GPS_LONGITUDE', 0, allow_duplicates=True)
-crumbs.insert(len(crumbs.columns), 'SHAPE_GPS_LATITUDE', 0, allow_duplicates=True)
-crumbs.insert(len(crumbs.columns), 'SHAPE_DEVIATION_DIST', 0, allow_duplicates=True)
-crumbs.insert(len(crumbs.columns), 'shape_line', crumbsLines['geometry'])
-del crumbsLines, cur_ls, cur_shape, shape_id
+    # Route shape objects
+    print("Writing route shape objects to breadcrumbs...")
+    for shape_id in shp.drop_duplicates('shape_index')['shape_index']:
+        cur_shape = shp.query('shape_index == @shape_id')
+        cur_ls = geo.LineString(list(cur_shape[['shape_pt_lon', 'shape_pt_lat']].to_records(index=False)))
+        crumbsLines.geometry.loc[crumbsLines['shapeID'] == shape_id] = cur_ls
 
-# Now naive projections (computationally intensive!)
-print(
-    "Writing naive route projections onto breadcrumbs...this may take an hour or so! Began: " + datetime.datetime.now().strftime(
-        "%H:%M:%S"))
-projections = crumbs.apply(get_projection, axis=1)
-crumbs[['SHAPE_GPS_LONGITUDE', 'SHAPE_GPS_LATITUDE']] = pd.DataFrame(projections)[0].to_list()
-crumbs = gp.GeoDataFrame(crumbs, geometry=gp.points_from_xy(crumbs.SHAPE_GPS_LONGITUDE, crumbs.SHAPE_GPS_LATITUDE))
-del projections
+    crumbs.insert(len(crumbs.columns), 'SHAPE_GPS_LONGITUDE', 0, allow_duplicates=True)
+    crumbs.insert(len(crumbs.columns), 'SHAPE_GPS_LATITUDE', 0, allow_duplicates=True)
+    crumbs.insert(len(crumbs.columns), 'SHAPE_DEVIATION_DIST', 0, allow_duplicates=True)
+    crumbs.insert(len(crumbs.columns), 'shape_line', crumbsLines['geometry'])
+    del crumbsLines, cur_ls, cur_shape, shape_id
 
-# Also we need the distance of each naive projection along the shape
-print("Writing distance of naive projections along route onto breadcrumbs...")
-projections = crumbs.apply(get_route_distance, axis=1)
-crumbs['SHAPE_DEVIATION_DIST'] = pd.DataFrame(projections)
-del projections
+    # Now naive projections (computationally intensive!)
+    print(
+        "Writing naive route projections onto breadcrumbs... Began: " + datetime.datetime.now().strftime(
+            "%H:%M:%S"))
+    projections = crumbs.apply(get_projection, axis=1)
+    crumbs[['SHAPE_GPS_LONGITUDE', 'SHAPE_GPS_LATITUDE']] = pd.DataFrame(projections)[0].to_list()
+    crumbs = gp.GeoDataFrame(crumbs, geometry=gp.points_from_xy(crumbs.SHAPE_GPS_LONGITUDE, crumbs.SHAPE_GPS_LATITUDE))
+    del projections
 
-# Final step is to find out-of-order crumbs by comparing each to its next neighbor
-# Notice we only have to find crumbs that are ahead, since exactly the same number of
-# crumbs will be behind as will be ahead.
-print("Matching out-of-order projections with their probable locations...")
-crumbs.insert(len(crumbs.columns), 'processing_distance', 0)
-crumbs.insert(len(crumbs.columns), 'scalar', 0)
-for n in range(1, MAX_LOOK_FORWARD):
-    crumbs['processing_distance'] = n
-    # Handle the edge case where an out-of-order point goes to the end of the recorded trip
-    crumbs['geometry'] = crumbs.mask(is_exactly_n_behind_and_terminal, update_to_n_ahead)['geometry']
-    # Now we've got to find the point on the route halfway between the correct crumbs
-    updates = crumbs.where(is_exactly_n_behind).dropna()
-    p1 = updates['SHAPE_DEVIATION_DIST'].shift(UP * n, fill_value=0)
-    p2 = updates['SHAPE_DEVIATION_DIST'].shift(UP * (n + 1), fill_value=0)
-    updates['scalar'] = (p1 + p2) / 2  # Distance traveled along route of the new median points
-    updates['geometry'] = gp.GeoDataFrame(updates.apply(get_interpolations, axis=1))
-    # Didn't want to have to manually loop through these, but luckily not too many...
-    for index, row in updates.iterrows():
-        crumbs.loc[index] = row
-    print("Step " + str(n) + " of " + str(MAX_LOOK_FORWARD))
+    # Also we need the distance of each naive projection along the shape
+    print(
+        "Writing distance of naive projections along route onto breadcrumbs... Began: " + datetime.datetime.now().strftime(
+            "%H:%M:%S"))
+    projections = crumbs.apply(get_route_distance, axis=1)
+    crumbs['SHAPE_DEVIATION_DIST'] = pd.DataFrame(projections)
+    del projections
 
-xy_vals = crumbs.apply(extract_xy, axis=1)
-crumbs[['SHAPE_GPS_LONGITUDE', 'SHAPE_GPS_LATITUDE']] = pd.DataFrame(xy_vals)[0].to_list()
-crumbs['SHAPE_DEVIATION_DIST'] = get_distance(crumbs['GPS_LONGITUDE'], crumbs['GPS_LATITUDE'],
-                                crumbs['SHAPE_GPS_LONGITUDE'], crumbs['SHAPE_GPS_LATITUDE']) / CONVERSION_FACTOR
-print("Crumbs more than " + str(METERS_TOLERANCE) + " meters off course: " +
-      str(crumbs.query('SHAPE_DEVIATION_DIST != 0')['SHAPE_DEVIATION_DIST'].count()))
-del p1, p2, n, updates, index, row, xy_vals
+    # Final step is to find out-of-order crumbs by comparing each to its next neighbor
+    # Notice we only have to find crumbs that are ahead, since exactly the same number of
+    # crumbs will be behind as will be ahead.
+    print(
+        "Matching out-of-order projections with their probable locations... Began: " + datetime.datetime.now().strftime(
+            "%H:%M:%S"))
+    crumbs.insert(len(crumbs.columns), 'processing_distance', 0)
+    crumbs.insert(len(crumbs.columns), 'scalar', 0)
+    for n in range(1, MAX_LOOK_FORWARD):
+        crumbs['processing_distance'] = n
+        # Handle the edge case where an out-of-order point goes to the end of the recorded trip
+        crumbs['geometry'] = crumbs.mask(is_exactly_n_behind_and_terminal, update_to_n_ahead)['geometry']
+        # Now we've got to find the point on the route halfway between the correct crumbs
+        updates = crumbs.where(is_exactly_n_behind).dropna()
+        p1 = updates['SHAPE_DEVIATION_DIST'].shift(UP * n, fill_value=0)
+        p2 = updates['SHAPE_DEVIATION_DIST'].shift(UP * (n + 1), fill_value=0)
+        updates['scalar'] = (p1 + p2) / 2  # Distance traveled along route of the new median points
+        updates['geometry'] = gp.GeoDataFrame(updates.apply(get_interpolations, axis=1))
+        # Didn't want to have to manually loop through these, but luckily not too many...
+        for index, row in updates.iterrows():
+            crumbs.loc[index] = row
+        print("Step " + str(n) + " of " + str(MAX_LOOK_FORWARD))
 
-# Add datetime column to crumbs table
-# This code is slow, but I don't want to bother with changing it
-print("Encoding timestamps... this may take half an hour.")
-crumbs.insert(len(crumbs.columns), 'timestamp', float)
-prog = 0
-for index, row in crumbs.iterrows():
-    ts = datetime.datetime
-    ts = ts.strptime(row['OPD_DATE'], '%d-%b-%y') + datetime.timedelta(seconds=row['ACT_TIME'])
-    crumbs.at[index, 'timestamp'] = ts.timestamp()
-    if prog % 80000 == 0:  # About 8 mil records total
-        print(str(prog) + ' records processed (of ' + str(crumbs['OPD_DATE'].size)
-              + '): currently ' + str(crumbs.at[index, 'timestamp']))
-    prog += 1
+    xy_vals = crumbs.apply(extract_xy, axis=1)
+    crumbs[['SHAPE_GPS_LONGITUDE', 'SHAPE_GPS_LATITUDE']] = pd.DataFrame(xy_vals)[0].to_list()
+    crumbs.insert(len(crumbs.columns), 'projected_point', crumbs['geometry'])
+    crumbs = gp.GeoDataFrame(crumbs, geometry=gp.points_from_xy(crumbs.GPS_LONGITUDE, crumbs.GPS_LATITUDE))
+    crumbs['SHAPE_DEVIATION_DIST'] = crumbs.apply(get_distance, axis=1) / CONVERSION_FACTOR
+    print("Crumbs more than " + str(METERS_TOLERANCE) + " meters off course: " +
+          str(crumbs.query('SHAPE_DEVIATION_DIST != 0')['SHAPE_DEVIATION_DIST'].count()))
+    del p1, p2, n, updates, xy_vals
 
-del prog, ts, index, row
+    # Add datetime column to crumbs table
+    # This code is slow, but I don't want to bother with changing it
+    print("Encoding timestamps... this may take half an hour.")
+    crumbs.insert(len(crumbs.columns), 'timestamp', float)
+    prog = 0
+    for index, row in crumbs.iterrows():
+        ts = datetime.datetime
+        ts = ts.strptime(row['OPD_DATE'], '%d-%b-%y') + datetime.timedelta(seconds=row['ACT_TIME'])
+        crumbs.at[index, 'timestamp'] = ts.timestamp()
+        if prog % 80000 == 0:  # About 8 mil records total
+            print(str(prog) + ' records processed (of ' + str(crumbs['OPD_DATE'].size)
+                  + '): currently ' + str(crumbs.at[index, 'timestamp']))
+        prog += 1
 
-# Add crumbs column for route_index, which will be emitted at the end
-crumbs.set_index('shapeID', inplace=True)
-joiner = shp.drop_duplicates(['route_index', 'shape_index'])[['route_index', 'shape_index']]
-crumbs = crumbs.join(joiner)
-del joiner
+    del prog, ts, index, row
 
-# Save calculated data to csv file
-# @SpecNotes Spec says ...
-# tripID - the ID of the recorded trip
-# timestamp - the moment at which the reading was taken
-# vehicleID - identifies of the vehicle
-# origLatitude - the original sensor latitude value
-# origLongitude - the original sensor longitude value
-# shapeID - the shape in shapes.txt that corresponds to tripID
-# routeID - the route in route.txt corresponding to tripID
-# plannedTripID - the planned trip corresponding to tripID
-#       (this value is not always correct and probably should not be used in your analyis)
-# correctedLatitude - the corrected vehicle position
-# correctedLongitude - the corrected vehicle position
-# distance - the Euclidean distance (in meters) from the original sensor reading and the corrected vehicle position
-# angle - this value is not implemented.
-print("Saving file to csv...")
-crumbs.insert(len(crumbs.columns), 'angle', 0)
-crumbs = crumbs.rename(columns={"trip_id": "tripID",
-                       "VEHICLE_ID": "vehicleID",
-                       "GPS_LATITUDE": "origLatitude",
-                       "GPS_LONGITUDE": "origLongitude",
-                       "route_index": "routeID",
-                       "SHAPE_GPS_LATITUDE": "correctedLatitude",
-                       "SHAPE_GPS_LONGITUDE": "correctedLongitude",
-                       "route_id": "routeID",
-                       "shape_index": "shapeID",
-                       "SHAPE_DEVIATION_DIST": "distance"})
-crumbs[['tripID', 'timestamp', 'vehicleID',
-       'origLatitude', 'origLongitude', 'shapeID',
-       'routeID', 'plannedTripID', 'correctedLatitude',
-       'correctedLongitude', 'distance', 'angle']].to_csv(Path().joinpath('out', 'deviation_breadcrumbs.csv'))
-print("File successfully written!")
+    # Add crumbs column for route_index, which will be emitted at the end
+    crumbs.set_index('shapeID', inplace=True)
+    joiner = shp.drop_duplicates(['route_index', 'shape_index'])[['route_index', 'shape_index']]
+    crumbs = crumbs.join(joiner)
+    del joiner
+
+    # Save calculated data to csv file
+    # @SpecNotes Spec says ...
+    # tripID - the ID of the recorded trip
+    # timestamp - the moment at which the reading was taken
+    # vehicleID - identifies of the vehicle
+    # origLatitude - the original sensor latitude value
+    # origLongitude - the original sensor longitude value
+    # shapeID - the shape in shapes.txt that corresponds to tripID
+    # routeID - the route in route.txt corresponding to tripID
+    # plannedTripID - the planned trip corresponding to tripID
+    #       (this value is not always correct and probably should not be used in your analyis)
+    # correctedLatitude - the corrected vehicle position
+    # correctedLongitude - the corrected vehicle position
+    # distance - the Euclidean distance (in meters) from the original sensor reading and the corrected vehicle position
+    # angle - this value is not implemented.
+    print("Saving file to csv...")
+    crumbs.insert(len(crumbs.columns), 'angle', 0)
+    crumbs = crumbs.rename(columns={"trip_id": "tripID",
+                                    "VEHICLE_ID": "vehicleID",
+                                    "GPS_LATITUDE": "origLatitude",
+                                    "GPS_LONGITUDE": "origLongitude",
+                                    "route_index": "routeID",
+                                    "SHAPE_GPS_LATITUDE": "correctedLatitude",
+                                    "SHAPE_GPS_LONGITUDE": "correctedLongitude",
+                                    "route_id": "routeID",
+                                    "shape_index": "shapeID",
+                                    "SHAPE_DEVIATION_DIST": "distance"})
+    crumbs[['tripID', 'timestamp', 'vehicleID',
+            'origLatitude', 'origLongitude', 'shapeID',
+            'routeID', 'plannedTripID', 'correctedLatitude',
+            'correctedLongitude', 'distance', 'angle']].to_csv(
+        Path().joinpath('out', 'shapes', 'deviation_breadcrumbs' + str(shape) + '.csv'))
+    print("File successfully written!")
+
+# Finish up
+print("Consolidating output ... Began: " + datetime.datetime.now().strftime("%H:%M:%S"))
+path = Path().joinpath('out', 'shapes')
+files = path.glob("*.csv")
+li = []
+
+for filename in files:
+    li.append(pd.read_csv(filename, header=0))
+
+crumbs = pd.concat(li, axis=0, ignore_index=True)
+del li, filename, files, path
+crumbs.to_csv(Path().joinpath('out', 'deviation_breadcrumbs.csv'))
 print("Deviation computations complete! Ended at: " + datetime.datetime.now().strftime("%H:%M:%S"))
