@@ -5,13 +5,47 @@ import numpy
 import pandas as pd
 import shapely.geometry as geo
 import shapely.ops as ops
-from datetime import datetime
+import datetime
 
 # constants
 UP = -1
 DOWN = 1
-TOLERANCE = -0.00001
+CONVERSION_FACTOR = 0.00000702271   # 1 meter = 0.00000702271
+METERS_TOLERANCE = 5
+TOLERANCE = -1 * CONVERSION_FACTOR * METERS_TOLERANCE
 MAX_LOOK_FORWARD = 30  # This number should be more than the length of longest contiguous seq. of out of order crumbs
+
+
+# Extracts the xy coordinates from the gdf's geometry field
+def extract_xy(df: gp.GeoDataFrame):
+    return df.geometry.coords[0][0], df.geometry.coords[0][1]
+
+
+# @Return False if SHAPE_DEVIATION_DIST[x] > SHAPE_DEVIATION_DIST[x + how_far] or
+#   trip_id[x] == trip_id[x + how_far); True otherwise
+def is_less_than_n_behind(df: gp.GeoDataFrame, how_far: int = 1) -> bool:
+    dist_traveled = df['SHAPE_DEVIATION_DIST'].shift(UP * how_far, fill_value=0) - df['SHAPE_DEVIATION_DIST']
+    is_diff_trip = (df['trip_id'] != df['trip_id'].shift(UP * how_far, fill_value=0))
+    return ~((TOLERANCE < dist_traveled) | is_diff_trip)
+
+
+# These functions assume that df['processing_distance'] is filled with the look-ahead distance
+# @Return True if element belongs exactly n places ahead; false otherwise
+def is_exactly_n_behind(df: gp.GeoDataFrame) -> bool:
+    how_far = df['processing_distance'][0]
+    return ~is_less_than_n_behind(df, how_far) & is_less_than_n_behind(df, how_far + 1)
+
+
+# @Return True if element belongs exactly n places ahead AND has no n + 1 to check; false otherwise
+def is_exactly_n_behind_and_terminal(df: gp.GeoDataFrame) -> bool:
+    how_far = df['processing_distance'][0]
+    is_terminal = (df['trip_id'] != df['trip_id'].shift(UP * how_far, fill_value=0))
+    return is_exactly_n_behind(df) & is_terminal
+
+
+def update_to_n_ahead(df: gp.GeoDataFrame) -> gp.GeoDataFrame:
+    how_far = df['processing_distance'][0]
+    return df.shift(UP * how_far)
 
 
 def get_distance(x1, y1, x2, y2):
@@ -28,12 +62,15 @@ def get_route_distance(row: gp.GeoDataFrame) -> float:
 
 
 def get_interpolations(row: gp.GeoDataFrame):
-    return row.shape_line.interpolate(row['scalar'])  # Interpolate() gets the point at n distance along the calling shape
+    # Interpolate() gets the point at n distance along the calling shape
+    return row.shape_line.interpolate(row['scalar'])
 
+
+print("Computing route deviations! Began: " + datetime.datetime.now().strftime("%H:%M:%S"))
 
 new_path = Path().joinpath('data', 'original', 'C-Tran_GTFSfiles_20200105', 'google_transit_20200105')
 routes = pd.read_csv(new_path.joinpath('routes.txt'))
-shapes = pd.read_csv(new_path.joinpath('shapes.txt'))
+shapes = pd.read_csv(new_path.joinpath('newshapes.txt'))
 trips = pd.read_csv(new_path.joinpath('trips.txt'))
 
 # Explanation: indices get lost in the merge, so we need to dup them
@@ -93,7 +130,7 @@ crumbs = crumbs.query('shapeID == 49')
 # Now it's time to find the "naive" projections onto the shape
 # First, we'll create a breadcrumbs gdf w/ correct shape geometry assigned
 crumbs.dropna(subset=['GPS_LONGITUDE', 'GPS_LATITUDE'], inplace=True)
-crumbs.insert(11, 'key', range(len(crumbs)))
+crumbs.insert(len(crumbs.columns), 'key', range(len(crumbs)))
 print("Writing point objects to breadcrumbs...")
 crumbs = gp.GeoDataFrame(crumbs, geometry=gp.points_from_xy(crumbs.GPS_LONGITUDE, crumbs.GPS_LATITUDE))
 crumbsLines = gp.GeoDataFrame(crumbs[['key', 'shapeID', 'geometry']])
@@ -106,17 +143,17 @@ for shape_id in shp.drop_duplicates('shape_index')['shape_index']:
     cur_shape = shp.query('shape_index == @shape_id')
     cur_ls = geo.LineString(list(cur_shape[['shape_pt_lon', 'shape_pt_lat']].to_records(index=False)))
     crumbsLines.geometry.loc[crumbsLines['shapeID'] == shape_id] = cur_ls
-    print(shape_id)
+    print("Shape ID: " + str(shape_id))
 
-crumbs.insert(12, 'SHAPE_GPS_LONGITUDE', 0, allow_duplicates=True)
-crumbs.insert(13, 'SHAPE_GPS_LATITUDE', 0, allow_duplicates=True)
-crumbs.insert(14, 'SHAPE_DEVIATION_DIST', 0, allow_duplicates=True)
-crumbs.insert(15, 'shape_line', crumbsLines['geometry'])
-del crumbsLines, cur_ls, cur_shape, shape_id, shp
+crumbs.insert(len(crumbs.columns), 'SHAPE_GPS_LONGITUDE', 0, allow_duplicates=True)
+crumbs.insert(len(crumbs.columns), 'SHAPE_GPS_LATITUDE', 0, allow_duplicates=True)
+crumbs.insert(len(crumbs.columns), 'SHAPE_DEVIATION_DIST', 0, allow_duplicates=True)
+crumbs.insert(len(crumbs.columns), 'shape_line', crumbsLines['geometry'])
+del crumbsLines, cur_ls, cur_shape, shape_id
 
 # Now naive projections (computationally intensive!)
 print(
-    "Writing naive route projections onto breadcrumbs...this may take an hour or so! Began: " + datetime.now().strftime(
+    "Writing naive route projections onto breadcrumbs...this may take an hour or so! Began: " + datetime.datetime.now().strftime(
         "%H:%M:%S"))
 projections = crumbs.apply(get_projection, axis=1)
 crumbs[['SHAPE_GPS_LONGITUDE', 'SHAPE_GPS_LATITUDE']] = pd.DataFrame(projections)[0].to_list()
@@ -129,51 +166,87 @@ projections = crumbs.apply(get_route_distance, axis=1)
 crumbs['SHAPE_DEVIATION_DIST'] = pd.DataFrame(projections)
 del projections
 
-
-# @Return False if SHAPE_DEVIATION_DIST[x] > SHAPE_DEVIATION_DIST[x + how_far] or
-#   trip_id[x] == trip_id[x + how_far); True otherwise
-def is_less_than_n_behind(df: gp.GeoDataFrame, how_far: int = 1) -> bool:
-    dist_traveled = df['SHAPE_DEVIATION_DIST'].shift(UP * how_far, fill_value=0) - df['SHAPE_DEVIATION_DIST']
-    is_diff_trip = (df['trip_id'] != df['trip_id'].shift(UP * how_far, fill_value=0))
-    return ~((TOLERANCE < dist_traveled) | is_diff_trip)
-
-
-# These functions assume that df['processing_distance'] is filled with the look-ahead distance
-# @Return True if element belongs exactly n places ahead; false otherwise
-def is_exactly_n_behind(df: gp.GeoDataFrame) -> bool:
-    how_far = df['processing_distance'][0]
-    return ~is_less_than_n_behind(df, how_far) & is_less_than_n_behind(df, how_far + 1)
-
-
-# @Return True if element belongs exactly n places ahead AND has no n + 1 to check; false otherwise
-def is_exactly_n_behind_and_terminal(df: gp.GeoDataFrame) -> bool:
-    how_far = df['processing_distance'][0]
-    is_terminal = (df['trip_id'] != df['trip_id'].shift(UP * how_far, fill_value=0))
-    return is_exactly_n_behind(df) & is_terminal
-
-
-def update_to_n_ahead(df: gp.GeoDataFrame) -> gp.GeoDataFrame:
-    how_far = df['processing_distance'][0]
-    return df.shift(UP * how_far)
-
-
 # Final step is to find out-of-order crumbs by comparing each to its next neighbor
 # Notice we only have to find crumbs that are ahead, since exactly the same number of
 # crumbs will be behind as will be ahead.
 print("Matching out-of-order projections with their probable locations...")
-crumbs.insert(16, 'processing_distance', 0)
-crumbs.insert(17, 'scalar', 0)
-crumbs.insert(18, 'potentials', 0)
+crumbs.insert(len(crumbs.columns), 'processing_distance', 0)
+crumbs.insert(len(crumbs.columns), 'scalar', 0)
 for n in range(1, MAX_LOOK_FORWARD):
     crumbs['processing_distance'] = n
     # Handle the edge case where an out-of-order point goes to the end of the recorded trip
     crumbs['geometry'] = crumbs.mask(is_exactly_n_behind_and_terminal, update_to_n_ahead)['geometry']
     # Now we've got to find the point on the route halfway between the correct crumbs
-    p1 = crumbs['SHAPE_DEVIATION_DIST'].shift(UP * n, fill_value=0)
-    p2 = crumbs['SHAPE_DEVIATION_DIST'].shift(UP * (n + 1), fill_value=0)
-    crumbs['scalar'] = (p1 + p2) / 2    # Distance traveled along route of the new median points
-    # The above required the full recordset to compute scalars; but now we can pare down to actual changes
     updates = crumbs.where(is_exactly_n_behind).dropna()
+    p1 = updates['SHAPE_DEVIATION_DIST'].shift(UP * n, fill_value=0)
+    p2 = updates['SHAPE_DEVIATION_DIST'].shift(UP * (n + 1), fill_value=0)
+    updates['scalar'] = (p1 + p2) / 2  # Distance traveled along route of the new median points
     updates['geometry'] = gp.GeoDataFrame(updates.apply(get_interpolations, axis=1))
-    crumbs['geometry'] = updates['geometry']
+    # Didn't want to have to manually loop through these, but luckily not too many...
+    for index, row in updates.iterrows():
+        crumbs.loc[index] = row
     print("Step " + str(n) + " of " + str(MAX_LOOK_FORWARD))
+
+xy_vals = crumbs.apply(extract_xy, axis=1)
+crumbs[['SHAPE_GPS_LONGITUDE', 'SHAPE_GPS_LATITUDE']] = pd.DataFrame(xy_vals)[0].to_list()
+crumbs['SHAPE_DEVIATION_DIST'] = get_distance(crumbs['GPS_LONGITUDE'], crumbs['GPS_LATITUDE'],
+                                crumbs['SHAPE_GPS_LONGITUDE'], crumbs['SHAPE_GPS_LATITUDE']) / CONVERSION_FACTOR
+print("Crumbs more than " + str(METERS_TOLERANCE) + " meters off course: " +
+      str(crumbs.query('SHAPE_DEVIATION_DIST != 0')['SHAPE_DEVIATION_DIST'].count()))
+del p1, p2, n, updates, index, row, xy_vals
+
+# Add datetime column to crumbs table
+# This code is slow, but I don't want to bother with changing it
+print("Encoding timestamps... this may take half an hour.")
+crumbs.insert(len(crumbs.columns), 'timestamp', float)
+prog = 0
+for index, row in crumbs.iterrows():
+    ts = datetime.datetime
+    ts = ts.strptime(row['OPD_DATE'], '%d-%b-%y') + datetime.timedelta(seconds=row['ACT_TIME'])
+    crumbs.at[index, 'timestamp'] = ts.timestamp()
+    if prog % 80000 == 0:  # About 8 mil records total
+        print(str(prog) + ' records processed (of ' + str(crumbs['OPD_DATE'].size)
+              + '): currently ' + str(crumbs.at[index, 'timestamp']))
+    prog += 1
+
+del prog, ts, index, row
+
+# Add crumbs column for route_index, which will be emitted at the end
+crumbs.set_index('shapeID', inplace=True)
+joiner = shp.drop_duplicates(['route_index', 'shape_index'])[['route_index', 'shape_index']]
+crumbs = crumbs.join(joiner)
+del joiner
+
+# Save calculated data to csv file
+# @SpecNotes Spec says ...
+# tripID - the ID of the recorded trip
+# timestamp - the moment at which the reading was taken
+# vehicleID - identifies of the vehicle
+# origLatitude - the original sensor latitude value
+# origLongitude - the original sensor longitude value
+# shapeID - the shape in shapes.txt that corresponds to tripID
+# routeID - the route in route.txt corresponding to tripID
+# plannedTripID - the planned trip corresponding to tripID
+#       (this value is not always correct and probably should not be used in your analyis)
+# correctedLatitude - the corrected vehicle position
+# correctedLongitude - the corrected vehicle position
+# distance - the Euclidean distance (in meters) from the original sensor reading and the corrected vehicle position
+# angle - this value is not implemented.
+print("Saving file to csv...")
+crumbs.insert(len(crumbs.columns), 'angle', 0)
+crumbs = crumbs.rename(columns={"trip_id": "tripID",
+                       "VEHICLE_ID": "vehicleID",
+                       "GPS_LATITUDE": "origLatitude",
+                       "GPS_LONGITUDE": "origLongitude",
+                       "route_index": "routeID",
+                       "SHAPE_GPS_LATITUDE": "correctedLatitude",
+                       "SHAPE_GPS_LONGITUDE": "correctedLongitude",
+                       "route_id": "routeID",
+                       "shape_index": "shapeID",
+                       "SHAPE_DEVIATION_DIST": "distance"})
+crumbs[['tripID', 'timestamp', 'vehicleID',
+       'origLatitude', 'origLongitude', 'shapeID',
+       'routeID', 'plannedTripID', 'correctedLatitude',
+       'correctedLongitude', 'distance', 'angle']].to_csv(Path().joinpath('out', 'deviation_breadcrumbs.csv'))
+print("File successfully written!")
+print("Deviation computations complete! Ended at: " + datetime.datetime.now().strftime("%H:%M:%S"))
