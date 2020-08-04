@@ -6,14 +6,15 @@ import pandas as pd
 import shapely.geometry as geo
 import shapely.ops as ops
 import datetime
+import numpy
 
 # constants
 UP = -1
 DOWN = 1
-TOLERANCE = -0.0000001  # 1 meter
+TOLERANCE = -0.0000001  # Floats within this amount of one another are considered equal
 MAX_LOOK_FORWARD = 30  # This number should be more than the length of longest contiguous seq. of out of order crumbs
-LAT_DIST = 111.2  # km per degree latitude at 45.63 degrees latitude (approximate)
-LON_DIST = 77.76  # km per degree longitude at 45.63 degrees latitude (approximate)
+LAT_DIST = 111.2 * 1000  # m per degree latitude at 45.63 degrees latitude (approximate)
+LON_DIST = 77.76 * 1000  # m per degree longitude at 45.63 degrees latitude (approximate)
 
 
 # Extracts the xy coordinates from the gdf's geometry field
@@ -52,9 +53,14 @@ def get_distance(row: gp.GeoDataFrame) -> float:
     return row.projected_point.distance(row.geometry)
 
 
+def get_distance2(x1, y1, x2, y2):
+    return numpy.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+
+
+# compares geometry field to shape_line
 def get_projection(row: gp.GeoDataFrame) -> (float, float):
     x = ops.nearest_points(row.geometry, row.shape_line)
-    return x[0].coords[0][0], x[0].coords[0][1]
+    return x[1].coords[0][0], x[1].coords[0][1]
 
 
 def get_route_distance(row: gp.GeoDataFrame) -> float:
@@ -68,7 +74,7 @@ def get_interpolations(row: gp.GeoDataFrame):
 
 print("Computing route deviations! Began: " + datetime.datetime.now().strftime("%H:%M:%S"))
 
-new_path = Path().joinpath('..','data', 'original', 'C-Tran_GTFSfiles_20200105', 'google_transit_20200105')
+new_path = Path().joinpath('..', 'data', 'original', 'C-Tran_GTFSfiles_20200105', 'google_transit_20200105')
 routes = pd.read_csv(new_path.joinpath('routes.txt'))
 shapes = pd.read_csv(new_path.joinpath('newshapes.txt'))
 trips = pd.read_csv(new_path.joinpath('trips.txt'))
@@ -92,7 +98,7 @@ shp.sort_values(['route_index', 'shape_index', 'shape_pt_sequence'])
 del routes, shapes, new_path, trips
 
 # Now grab breadcrumb data
-path = Path().joinpath('..','data', 'original', 'cyclic_data_20200224_0320_wkd')
+path = Path().joinpath('..', 'data', 'original', 'cyclic_data_20200224_0320_wkd')
 files = path.glob("*.tsv")
 li = []
 
@@ -115,8 +121,8 @@ del tripToShape
 
 # Add vehicle_number and route_id to crumbs
 cad_avl = pd.read_csv(
-    Path().joinpath('..','data', 'original', 'C-Tran_CAD_AVL_trips_Feb+Mar2020', 'C-Tran_CAD_AVL_trips_Feb'
-                                                                            '+Mar2020.csv'))
+    Path().joinpath('..', 'data', 'original', 'C-Tran_CAD_AVL_trips_Feb+Mar2020', 'C-Tran_CAD_AVL_trips_Feb'
+                                                                                  '+Mar2020.csv'))
 cad_avl = cad_avl[['vehicle_number', 'trip_id', 'route_number']]
 cad_avl = cad_avl.drop_duplicates(['vehicle_number', 'trip_id', 'route_number'])
 cad_avl.set_index('trip_id', inplace=True)
@@ -139,9 +145,11 @@ total_set = crumbs
 shapes = shp['shape_index'].unique().tolist()
 for shape in shapes:
     crumbs = total_set.query('shapeID == @shape')
-    if len(crumbs) == 0 or os.isfile('./out/shapes/' + 'deviation_breadcrumbs' + str(shape) + '.csv'):
+    if len(crumbs) == 0 or os.isfile('/Projects/ExplorationsInDataScienceProject/out/shapes/' +
+                                     'deviation_breadcrumbs' + str(shape) + '.csv'):
         continue
     else:
+        print('***********************************')
         print('***********************************')
         print("Computing route deviations for shape: " + str(shape) + " Began: " + datetime.datetime.now().strftime(
             "%H:%M:%S"))
@@ -213,7 +221,9 @@ for shape in shapes:
     crumbs[['SHAPE_GPS_LONGITUDE', 'SHAPE_GPS_LATITUDE']] = pd.DataFrame(xy_vals)[0].to_list()
     crumbs.insert(len(crumbs.columns), 'projected_point', crumbs['geometry'])
     crumbs = gp.GeoDataFrame(crumbs, geometry=gp.points_from_xy(crumbs.GPS_LONGITUDE, crumbs.GPS_LATITUDE))
-    crumbs['SHAPE_DEVIATION_DIST'] = crumbs.apply(get_distance, axis=1)*1000
+    # crumbs['SHAPE_DEVIATION_DIST'] = crumbs.apply(get_distance, axis=1)*1000
+    crumbs['SHAPE_DEVIATION_DIST'] = get_distance2(crumbs['lon'], crumbs['lat'],
+                                                   crumbs['SHAPE_GPS_LONGITUDE'], crumbs['SHAPE_GPS_LATITUDE'])
     print("Crumbs more than 5 meters off course: " +
           str(crumbs.query('SHAPE_DEVIATION_DIST > 5')['SHAPE_DEVIATION_DIST'].count()))
     del p1, p2, n, updates, xy_vals
@@ -245,7 +255,7 @@ for shape in shapes:
     # shapeID - the shape in shapes.txt that corresponds to tripID
     # routeID - the route in route.txt corresponding to tripID
     # plannedTripID - the planned trip corresponding to tripID
-    #       (this value is not always correct and probably should not be used in your analyis)
+    #       (this value is not always correct and probably should not be used in your analysis)
     # correctedLatitude - the corrected vehicle position
     # correctedLongitude - the corrected vehicle position
     # distance - the Euclidean distance (in meters) from the original sensor reading and the corrected vehicle position
@@ -268,12 +278,12 @@ for shape in shapes:
             'origLatitude', 'origLongitude', 'shapeID',
             'routeID', 'plannedTripID', 'correctedLatitude',
             'correctedLongitude', 'distance', 'angle']].to_csv(
-        Path().joinpath('..','out', 'shapes', 'deviation_breadcrumbs' + str(shape) + '.csv'))
+        Path().joinpath('..', 'out', 'shapes', 'deviation_breadcrumbs' + str(shape) + '.csv'), index=False)
     print("File successfully written!")
 
 # Finish up
 print("Consolidating output ... Began: " + datetime.datetime.now().strftime("%H:%M:%S"))
-path = Path().joinpath('..','out', 'shapes')
+path = Path().joinpath('..', 'out', 'shapes')
 files = path.glob("*.csv")
 li = []
 
@@ -282,5 +292,5 @@ for filename in files:
 
 crumbs = pd.concat(li, axis=0, ignore_index=True)
 del li, filename, files, path
-crumbs.to_csv(Path().joinpath('..','out', 'deviation_breadcrumbs.csv'))
+crumbs.to_csv(Path().joinpath('..', 'out', 'deviation_breadcrumbs.csv'), index=False)
 print("Deviation computations complete! Ended at: " + datetime.datetime.now().strftime("%H:%M:%S"))
