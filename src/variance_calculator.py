@@ -196,8 +196,8 @@ for shape in shapes:
     del projections
 
     # Final step is to find out-of-order crumbs by comparing each to its next neighbor
-    # Notice we only have to find crumbs that are ahead, since exactly the same number of
-    # crumbs will be behind as will be ahead.
+    # Right now we're only looking ahead; we also need to look behind once per iteration
+    # TODO: Include look-behind logic per iteration
     print(
         "Matching out-of-order projections with their probable locations... Began: " + datetime.datetime.now().strftime(
             "%H:%M:%S"))
