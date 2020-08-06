@@ -167,16 +167,15 @@ for shape in shapes:
 
     # Route shape objects
     print("Writing route shape objects to breadcrumbs...")
-    for shape_id in shp.drop_duplicates('shape_index')['shape_index']:
-        cur_shape = shp.query('shape_index == @shape_id')
-        cur_ls = geo.LineString(list(cur_shape[['lon', 'lat']].to_records(index=False)))
-        crumbsLines.geometry.loc[crumbsLines['shapeID'] == shape_id] = cur_ls
+    cur_shape = shp.query('shape_index == @shape')
+    cur_ls = geo.LineString(list(cur_shape[['lon', 'lat']].to_records(index=False)))
+    crumbsLines.geometry.loc[crumbsLines['shapeID'] == shape] = cur_ls
 
     crumbs.insert(len(crumbs.columns), 'SHAPE_GPS_LONGITUDE', 0, allow_duplicates=True)
     crumbs.insert(len(crumbs.columns), 'SHAPE_GPS_LATITUDE', 0, allow_duplicates=True)
     crumbs.insert(len(crumbs.columns), 'SHAPE_DEVIATION_DIST', 0, allow_duplicates=True)
     crumbs.insert(len(crumbs.columns), 'shape_line', crumbsLines['geometry'])
-    del crumbsLines, cur_ls, cur_shape, shape_id
+    del crumbsLines, cur_ls, cur_shape
 
     # Now naive projections onto crumbs
     print(
@@ -203,7 +202,7 @@ for shape in shapes:
             "%H:%M:%S"))
     crumbs.insert(len(crumbs.columns), 'processing_distance', 0)
     crumbs.insert(len(crumbs.columns), 'scalar', 0)
-    for n in range(1, MAX_LOOK_FORWARD):
+    for n in range(MAX_LOOK_FORWARD, 1, -1):
         crumbs['processing_distance'] = n
         # Handle the edge case where an out-of-order point goes to the end of the recorded trip
         crumbs['geometry'] = crumbs.mask(is_exactly_n_behind_and_terminal, update_to_n_ahead)['geometry']
