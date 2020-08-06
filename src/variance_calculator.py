@@ -12,7 +12,7 @@ import numpy
 UP = -1
 DOWN = 1
 TOLERANCE = -0.0000001  # Floats within this amount of one another are considered equal
-MAX_LOOK_FORWARD = 30  # This number should be more than the length of longest contiguous seq. of out of order crumbs
+MAX_LOOK_FORWARD = 30  # This number should be more than the highest number of places a crumb is out of order by
 LAT_DIST = 111.2 * 1000  # m per degree latitude at 45.63 degrees latitude (approximate)
 LON_DIST = 77.76 * 1000  # m per degree longitude at 45.63 degrees latitude (approximate)
 
@@ -20,6 +20,33 @@ LON_DIST = 77.76 * 1000  # m per degree longitude at 45.63 degrees latitude (app
 # Extracts the xy coordinates from the gdf's geometry field
 def extract_xy(df: gp.GeoDataFrame):
     return df.geometry.coords[0][0], df.geometry.coords[0][1]
+
+
+# @Return False if SHAPE_DEVIATION_DIST[x] < SHAPE_DEVIATION_DIST[x - how_far] or
+#   trip_id[x] == trip_id[x + how_far); True otherwise
+def is_less_than_n_ahead(df: gp.GeoDataFrame, how_far: int = 1) -> bool:
+    dist_traveled = df['SHAPE_DEVIATION_DIST'] - df['SHAPE_DEVIATION_DIST'].shift(DOWN * how_far, fill_value=0)
+    is_diff_trip = (df['trip_id'] != df['trip_id'].shift(DOWN * how_far, fill_value=0))
+    return ~((TOLERANCE < dist_traveled) | is_diff_trip)
+
+
+# These functions assume that df['processing_distance'] is filled with the look-behind distance
+# @Return True if element belongs exactly n places behind; false otherwise
+def is_exactly_n_ahead(df: gp.GeoDataFrame) -> bool:
+    how_far = df['processing_distance'][0]
+    return ~is_less_than_n_ahead(df, how_far) & is_less_than_n_ahead(df, how_far + 1)
+
+
+# @Return True if element belongs exactly n places behind AND has no n - 1 to check; false otherwise
+def is_exactly_n_ahead_and_terminal(df: gp.GeoDataFrame) -> bool:
+    how_far = df['processing_distance'][0]
+    is_terminal = (df['trip_id'] != df['trip_id'].shift(DOWN * how_far, fill_value=0))
+    return is_exactly_n_ahead(df) & is_terminal
+
+
+def update_to_n_behind(df: gp.GeoDataFrame) -> gp.GeoDataFrame:
+    how_far = df['processing_distance'][0]
+    return df.shift(DOWN * how_far)
 
 
 # @Return False if SHAPE_DEVIATION_DIST[x] > SHAPE_DEVIATION_DIST[x + how_far] or
@@ -195,8 +222,6 @@ for shape in shapes:
     del projections
 
     # Final step is to find out-of-order crumbs by comparing each to its next neighbor
-    # Right now we're only looking ahead; we also need to look behind once per iteration
-    # TODO: Include look-behind logic per iteration
     print(
         "Matching out-of-order projections with their probable locations... Began: " + datetime.datetime.now().strftime(
             "%H:%M:%S"))
@@ -206,12 +231,29 @@ for shape in shapes:
         crumbs['processing_distance'] = n
         # Handle the edge case where an out-of-order point goes to the end of the recorded trip
         crumbs['geometry'] = crumbs.mask(is_exactly_n_behind_and_terminal, update_to_n_ahead)['geometry']
-        # Now we've got to find the point on the route halfway between the correct crumbs
+
+        # Find the correct place ahead halfway between two new crumbs
         updates = crumbs.where(is_exactly_n_behind).dropna()
         p1 = updates['SHAPE_DEVIATION_DIST'].shift(UP * n, fill_value=0)
         p2 = updates['SHAPE_DEVIATION_DIST'].shift(UP * (n + 1), fill_value=0)
         updates['scalar'] = (p1 + p2) / 2  # Distance traveled along route of the new median points
         updates['geometry'] = gp.GeoDataFrame(updates.apply(get_interpolations, axis=1))
+        updates['SHAPE_DEVIATION_DIST'] = updates['scalar']
+        # Didn't want to have to manually loop through these, but luckily not too many...
+        for index, row in updates.iterrows():
+            crumbs.loc[index] = row
+
+        crumbs['processing_distance'] = -n
+        # Handle the edge case where an out-of-order point goes to the beginning the recorded trip
+        crumbs['geometry'] = crumbs.mask(is_exactly_n_ahead_and_terminal, update_to_n_behind)['geometry']
+
+        # Find the correct place behind halfway between two new crumb
+        updates = crumbs.where(is_exactly_n_ahead).dropna()
+        p1 = updates['SHAPE_DEVIATION_DIST'].shift(DOWN * n, fill_value=0)
+        p2 = updates['SHAPE_DEVIATION_DIST'].shift(DOWN * (n + 1), fill_value=0)
+        updates['scalar'] = (p1 + p2) / 2  # Distance traveled along route of the new median points
+        updates['geometry'] = gp.GeoDataFrame(updates.apply(get_interpolations, axis=1))
+        updates['SHAPE_DEVIATION_DIST'] = updates['scalar']
         # Didn't want to have to manually loop through these, but luckily not too many...
         for index, row in updates.iterrows():
             crumbs.loc[index] = row
