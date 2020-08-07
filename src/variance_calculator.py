@@ -227,7 +227,7 @@ for shape in shapes:
             "%H:%M:%S"))
     crumbs.insert(len(crumbs.columns), 'processing_distance', 0)
     crumbs.insert(len(crumbs.columns), 'scalar', 0)
-    for n in range(MAX_LOOK_FORWARD, 1, -1):
+    for n in range(1, MAX_LOOK_FORWARD):
         crumbs['processing_distance'] = n
         # Handle the edge case where an out-of-order point goes to the end of the recorded trip
         crumbs['geometry'] = crumbs.mask(is_exactly_n_behind_and_terminal, update_to_n_ahead)['geometry']
@@ -254,7 +254,6 @@ for shape in shapes:
         updates['scalar'] = (p1 + p2) / 2  # Distance traveled along route of the new median points
         updates['geometry'] = gp.GeoDataFrame(updates.apply(get_interpolations, axis=1))
         updates['SHAPE_DEVIATION_DIST'] = updates['scalar']
-        # Didn't want to have to manually loop through these, but luckily not too many...
         for index, row in updates.iterrows():
             crumbs.loc[index] = row
 
@@ -324,7 +323,7 @@ for shape in shapes:
 
 # Finish up
 print("Consolidating output ... Began: " + datetime.datetime.now().strftime("%H:%M:%S"))
-path = Path().joinpath('..', 'out', 'shapes')
+path = Path().joinpath('.', 'out', 'shapes')
 files = path.glob("*.csv")
 li = []
 
@@ -333,5 +332,5 @@ for filename in files:
 
 crumbs = pd.concat(li, axis=0, ignore_index=True)
 del li, filename, files, path
-crumbs.to_csv(Path().joinpath('..', 'out', 'deviation_breadcrumbs.csv'), index=False)
+crumbs.to_csv(Path().joinpath('.', 'out', 'deviations', 'deviation_breadcrumbs.csv'), index=False)
 print("Deviation computations complete! Ended at: " + datetime.datetime.now().strftime("%H:%M:%S"))
