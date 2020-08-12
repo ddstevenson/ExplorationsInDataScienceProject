@@ -10,3 +10,9 @@ https://github.com/ddstevenson/ExplorationsInDataScienceProject/blob/master/doc/
 
 ## Midpoint Report
 https://github.com/ddstevenson/ExplorationsInDataScienceProject/blob/master/doc/Midpoint%20Report.pdf
+
+## Research Presentation
+https://github.com/ddstevenson/ExplorationsInDataScienceProject/blob/master/doc/ResearchPresentation.pdf
+
+## Final Presentation
+https://github.com/ddstevenson/ExplorationsInDataScienceProject/blob/master/doc/FinalPresentation.pdf
